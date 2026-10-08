@@ -15,7 +15,7 @@ import {
 } from "../shared/usage";
 import { readOpenCodeRows } from "./adapters/opencode";
 import { readCodexRows } from "./adapters/codex";
-import { probeGemini } from "./adapters/gemini";
+import { collectAntigravity } from "./adapters/antigravity";
 import { backendForProvider, mapSourceStatus } from "./discovery";
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -106,22 +106,27 @@ export class UsageAggregator {
       adapterSources.push({ backend: "codex", status: "error", detail: String(error) });
     }
 
-    const gemini = probeGemini();
-    const geminiDetail =
-      gemini.status === "error"
-        ? gemini.detail
-        : "local data encrypted, unreadable (~/.gemini/antigravity)";
+    const antigravity = collectAntigravity();
 
     const sources = providerEntries
-      ? this.discoveredSources(providerEntries, rows, geminiDetail, adapterSources)
+      ? this.discoveredSources(providerEntries, rows, antigravity, adapterSources)
       : [
           ...adapterSources,
-          {
-            backend: "antigravity",
-            label: "Antigravity",
-            status: gemini.status,
-            detail: gemini.detail,
-          } as SourceStatus,
+          ...(["cli", "acp"] as const).map((kind) => {
+            const stats = antigravity[kind];
+            const backend = `antigravity-${kind}` as const;
+            const label = kind === "cli" ? "Antigravity (CLI)" : "Antigravity (ACP)";
+            if (stats && stats.sessions > 0) {
+              return {
+                backend,
+                label,
+                status: "used",
+                sessions: stats.sessions,
+                detail: `${stats.sessions} sessions · ${stats.steps} steps · token usage not recorded locally`,
+              } as SourceStatus;
+            }
+            return { backend, label, status: "never_used" } as SourceStatus;
+          }),
         ];
 
     const filtered = filterPeriod(rows, period, nowMs);
@@ -170,7 +175,7 @@ export class UsageAggregator {
   private discoveredSources(
     providerEntries: ProviderEntry[],
     rows: UsageRow[],
-    geminiDetail: string | undefined,
+    antigravity: { cli: unknown; acp: unknown },
     adapterSources: SourceStatus[],
   ): SourceStatus[] {
     const rowsByBackend = new Map<string, number>();
@@ -182,7 +187,7 @@ export class UsageAggregator {
       return mapSourceStatus({
         provider,
         backendRows: rowsByBackend.get(backend) ?? 0,
-        unreadableDetail: backend === "antigravity" ? geminiDetail : undefined,
+        antigravity: antigravity as never,
       });
     });
     const covered = new Set(providerEntries.map((provider) => backendForProvider(provider.provider)));

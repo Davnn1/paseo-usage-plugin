@@ -188,7 +188,7 @@ test("usage.summary contract validates a full aggregated payload", () => {
 test("backendForProvider maps aliases and passes through unknown ids", () => {
   assert.equal(backendForProvider("codex"), "codex");
   assert.equal(backendForProvider("opencode"), "opencode");
-  assert.equal(backendForProvider("antigravity"), "antigravity");
+  assert.equal(backendForProvider("antigravity"), "antigravity-cli");
   assert.equal(backendForProvider("antigravity-acp"), "antigravity-acp");
   assert.equal(backendForProvider("claude"), "claude");
   assert.equal(backendForProvider("oh-my-pi"), "oh-my-pi");
@@ -206,19 +206,29 @@ test("mapSourceStatus: used when rows exist", () => {
   assert.equal(source.enabled, false);
 });
 
-test("mapSourceStatus: no_data_source for antigravity with encrypted store", () => {
-  const source = mapSourceStatus({
+test("mapSourceStatus: antigravity used from store stats, never_used when empty", () => {
+  const used = mapSourceStatus({
     provider: { provider: "antigravity", label: "Antigravity", enabled: true },
     backendRows: 0,
-    unreadableDetail: "local store terenkripsi",
+    antigravity: { "antigravity-cli": { sessions: 3, steps: 42, lastModifiedMs: 1 } },
   });
-  assert.equal(source.status, "no_data_source");
-  assert.match(source.detail ?? "", /omniroute/);
+  assert.equal(used.status, "used");
+  assert.equal(used.sessions, 3);
+  assert.equal(used.label, "Antigravity (CLI)");
+  assert.match(used.detail ?? "", /token usage not recorded locally/);
+
+  const empty = mapSourceStatus({
+    provider: { provider: "antigravity-acp" },
+    backendRows: 0,
+    antigravity: { "antigravity-acp": { sessions: 0, steps: 0, lastModifiedMs: 0 } },
+  });
+  assert.equal(empty.status, "never_used");
+  assert.equal(empty.label, "Antigravity (ACP)");
 });
 
 test("mapSourceStatus: never_used for registered providers without rows", () => {
   for (const provider of ["claude", "copilot", "pi", "oh-my-pi", "muse", "kimi", "antigravity-acp"]) {
-    const source = mapSourceStatus({ provider: { provider }, backendRows: 0 });
+    const source = mapSourceStatus({ provider: { provider }, backendRows: 0, antigravity: { "antigravity-acp": { sessions: 0, steps: 0, lastModifiedMs: 0 } } });
     assert.equal(source.status, "never_used", provider);
   }
   const opencode = mapSourceStatus({ provider: { provider: "opencode" }, backendRows: 0 });
@@ -474,4 +484,40 @@ test("buildPillText: no session and no daily → honest placeholder", () => {
   const text = buildPillText(null, null);
   assert.equal(text.label, "—");
   assert.equal(text.title, "Usage unavailable");
+});
+
+// ---------------------------------------------------------------------------
+// Antigravity store stats
+// ---------------------------------------------------------------------------
+
+import { collectStats, countSteps, extractConversationId } from "../server/adapters/antigravity";
+
+test("extractConversationId parses plain UUID and plugin: JSON", () => {
+  assert.equal(extractConversationId("9ba0609a-37ba-47e0-9eb4-3a2776e787d4"), "9ba0609a-37ba-47e0-9eb4-3a2776e787d4");
+  assert.equal(
+    extractConversationId('plugin:{"version":1,"data":{"conversationId":"9ba0609a-37ba-47e0-9eb4-3a2776e787d4"}}'),
+    "9ba0609a-37ba-47e0-9eb4-3a2776e787d4",
+  );
+  assert.equal(extractConversationId("plugin:{broken"), null);
+  assert.equal(extractConversationId("ses_opencode123"), null);
+  assert.equal(extractConversationId('plugin:{"version":1,"data":{}}'), null);
+});
+
+test("countSteps and collectStats read a fixture conversations directory", () => {
+  const dir = mkdtempSync(join(tmpdir(), "usage-agy-"));
+  const db1 = join(dir, "aaaa1111-2222-4333-8444-555566667777.db");
+  const db2 = join(dir, "bbbb1111-2222-4333-8444-555566667777.db");
+  for (const [path, steps] of [[db1, 3], [db2, 0]] as const) {
+    const db = new DatabaseSync(path);
+    db.exec("CREATE TABLE steps (id INTEGER)");
+    for (let i = 0; i < steps; i += 1) db.prepare("INSERT INTO steps VALUES (?)").run(i);
+    db.close();
+  }
+  writeFileSync(join(dir, "ignore.txt"), "x");
+  assert.equal(countSteps(db1), 3);
+  assert.equal(countSteps(db2), 0);
+  const stats = collectStats(dir);
+  assert.equal(stats?.sessions, 2);
+  assert.equal(stats?.steps, 3);
+  assert.equal(collectStats(join(dir, "missing")), null);
 });
