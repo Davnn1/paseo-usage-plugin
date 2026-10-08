@@ -29,9 +29,10 @@ export function Dashboard({
   data: UsageDashboardOutput;
 } & PluginHostProps) {
   const compact = layout.compact;
-  // Lifted hover/press state: focusing a day in one chart highlights it in the others.
-  const [focus, setFocus] = useState<DailyPoint | null>(null);
-  const focusLine = (hint: string) => (
+  // Independent hover state per chart (round 11: no cross-chart linking).
+  const [heatFocus, setHeatFocus] = useState<DailyPoint | null>(null);
+  const [trendFocus, setTrendFocus] = useState<DailyPoint | null>(null);
+  const focusLine = (focus: DailyPoint | null, hint: string) => (
     <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11 }} numberOfLines={1}>
       {focus
         ? `${focus.date} · in ${formatTokens(focus.inputTokens)} · out ${formatTokens(focus.outputTokens)} · $${focus.costUsd.toFixed(2)} · ${focus.sessions} sessions`
@@ -43,8 +44,8 @@ export function Dashboard({
     <View style={stylesGrid(compact)}>
       <View style={stylesCard(theme, compact)}>
         <Text style={stylesCardTitle(theme)}>OVERVIEW</Text>
-        <Heatmap points={data.heatmapDaily} theme={theme} compact={compact} focus={focus} onFocus={setFocus} />
-        {focusLine("Hover or press a day for details.")}
+        <Heatmap points={data.heatmapDaily} theme={theme} compact={compact} focus={heatFocus} onFocus={setHeatFocus} />
+        {focusLine(heatFocus, "Hover or press a day for details.")}
       </View>
 
       <View style={stylesCard(theme, compact)}>
@@ -54,8 +55,8 @@ export function Dashboard({
 
       <View style={stylesCard(theme, compact)}>
         <Text style={stylesCardTitle(theme)}>MODEL USAGE OVER TIME</Text>
-        <TrendChart points={data.series.daily} theme={theme} compact={compact} focus={focus} onFocus={setFocus} />
-        {focusLine("Hover or press a bar for details.")}
+        <TrendChart points={data.series.daily} theme={theme} compact={compact} focus={trendFocus} onFocus={setTrendFocus} />
+        {focusLine(trendFocus, "Hover or press a bar for details.")}
       </View>
 
       <View style={stylesCard(theme, compact)}>
@@ -462,107 +463,136 @@ function TrendChart({
     return <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>No usage in this period.</Text>;
   }
 
+  const count = points.length;
+  const gap = 1;
+  // Bar width: fills the container when few segments, clamps to a readable
+  // minimum when many (All period scrolls horizontally instead of shrinking).
+  const distributed = width > 0 ? width / count : 8;
+  const barWidth = Math.min(28, Math.max(8, distributed));
+  const scroll = width > 0 && count * (barWidth + gap) > width;
+  const slotWidth = scroll ? barWidth + gap : width > 0 ? width / count : barWidth + gap;
+
   const focusIndex = focus ? points.findIndex((point) => point.date === focus.date) : -1;
   const focused = focusIndex >= 0 ? points[focusIndex] : null;
-  const count = points.length;
-  const slotWidth = width > 0 ? width / count : 0;
+
+  const renderBar = (point: DailyPoint, widthStyle: { width: number } | { flex: number }) => {
+    const inRatio = point.inputTokens / maxTokens;
+    const outRatio = point.outputTokens / maxTokens;
+    const costRatio = point.costUsd / maxCost;
+    const hasActivity = point.inputTokens + point.outputTokens > 0;
+    const column = (
+      <View style={[{ height: chartHeight, justifyContent: "flex-end" }, widthStyle]}>
+        <View
+          style={{
+            position: "absolute" as const,
+            left: 0,
+            right: 0,
+            bottom: Math.round(costRatio * (chartHeight - 6)),
+            height: 3,
+            borderRadius: 1,
+            backgroundColor: theme.colors.statusWarning,
+            opacity: point.costUsd > 0 ? 1 : 0,
+          }}
+        />
+        <View
+          style={{
+            height: Math.max(0, Math.round(inRatio * chartHeight)),
+            backgroundColor: theme.colors.accent,
+            opacity: point.inputTokens > 0 ? 0.9 : 0,
+            borderTopLeftRadius: 1,
+            borderTopRightRadius: 1,
+          }}
+        />
+        <View
+          style={{
+            height: Math.max(0, Math.round(outRatio * chartHeight)),
+            backgroundColor: theme.colors.statusSuccess,
+            opacity: point.outputTokens > 0 ? 0.9 : 0,
+          }}
+        />
+      </View>
+    );
+    return hasActivity ? (
+      <Pressable
+        key={point.date}
+        onHoverIn={() => onFocus(point)}
+        onHoverOut={() => onFocus(null)}
+        onPress={() => onFocus(focused?.date === point.date ? null : point)}
+      >
+        {column}
+      </Pressable>
+    ) : (
+      <View key={point.date}>{column}</View>
+    );
+  };
+
+  const inner = (
+    <View
+      style={{
+        flexDirection: "row",
+        gap,
+        height: chartHeight,
+        width: scroll ? count * (barWidth + gap) : "100%",
+      }}
+    >
+      {points.map((point) => renderBar(point, scroll ? { width: barWidth } : { flex: 1 }))}
+      {focused && focusIndex >= 0 ? (
+        <>
+          <View
+            style={{
+              position: "absolute" as const,
+              top: 0,
+              height: chartHeight,
+              left: focusIndex * slotWidth + slotWidth / 2,
+              width: 0,
+              gap: 2,
+            }}
+          >
+            {Array.from({ length: Math.floor(chartHeight / 5) }, (_, i) => (
+              <View key={i} style={{ width: 1, height: 3, backgroundColor: theme.colors.foregroundMuted }} />
+            ))}
+          </View>
+          <View
+            style={{
+              position: "absolute" as const,
+              top: 2,
+              left: Math.min(
+                Math.max(4, focusIndex * slotWidth + slotWidth / 2 - 75),
+                Math.max(4, (scroll ? count * (barWidth + gap) : width) - 154),
+              ),
+              width: 150,
+              backgroundColor: theme.colors.surface2,
+              borderRadius: 8,
+              borderWidth: 1,
+              borderColor: theme.colors.border,
+              padding: 8,
+              gap: 2,
+              zIndex: 10,
+            }}
+          >
+            <Text style={{ color: theme.colors.foreground, fontSize: 11, fontWeight: "700" as const }}>{focused.date}</Text>
+            <Text style={{ color: theme.colors.foregroundMuted, fontSize: 10 }}>
+              {`in ${formatTokens(focused.inputTokens)} · out ${formatTokens(focused.outputTokens)}`}
+            </Text>
+            <Text style={{ color: theme.colors.foregroundMuted, fontSize: 10 }}>
+              {`$${focused.costUsd.toFixed(2)} · ${focused.sessions} sessions`}
+            </Text>
+          </View>
+        </>
+      ) : null}
+    </View>
+  );
 
   return (
     <View style={{ gap: 6 }}>
-      <View onLayout={(event) => setWidth(event.nativeEvent.layout.width)} style={{ height: chartHeight + (focused ? 0 : 0) }}>
-        <View style={{ flexDirection: "row", gap: 1, height: chartHeight }}>
-          {points.map((point) => {
-            const inRatio = point.inputTokens / maxTokens;
-            const outRatio = point.outputTokens / maxTokens;
-            const costRatio = point.costUsd / maxCost;
-            const hasActivity = point.inputTokens + point.outputTokens > 0;
-            const column = (
-              <View style={{ flex: 1, height: chartHeight, justifyContent: "flex-end" }}>
-                <View
-                  style={{
-                    position: "absolute" as const,
-                    left: 0,
-                    right: 0,
-                    bottom: Math.round(costRatio * (chartHeight - 6)),
-                    height: 3,
-                    borderRadius: 1,
-                    backgroundColor: theme.colors.statusWarning,
-                    opacity: point.costUsd > 0 ? 1 : 0,
-                  }}
-                />
-                <View
-                  style={{
-                    height: Math.max(0, Math.round(inRatio * chartHeight)),
-                    backgroundColor: theme.colors.accent,
-                    opacity: point.inputTokens > 0 ? 0.9 : 0,
-                    borderTopLeftRadius: 1,
-                    borderTopRightRadius: 1,
-                  }}
-                />
-                <View
-                  style={{
-                    height: Math.max(0, Math.round(outRatio * chartHeight)),
-                    backgroundColor: theme.colors.statusSuccess,
-                    opacity: point.outputTokens > 0 ? 0.9 : 0,
-                  }}
-                />
-              </View>
-            );
-            return hasActivity ? (
-              <Pressable
-                key={point.date}
-                onHoverIn={() => onFocus(point)}
-                onHoverOut={() => onFocus(null)}
-                onPress={() => onFocus(focused?.date === point.date ? null : point)}
-              >
-                {column}
-              </Pressable>
-            ) : (
-              <View key={point.date}>{column}</View>
-            );
-          })}
-        </View>
-        {focused && focusIndex >= 0 && slotWidth > 0 ? (
-          <>
-            <View
-              style={{
-                position: "absolute" as const,
-                top: 0,
-                height: chartHeight,
-                left: focusIndex * slotWidth + slotWidth / 2,
-                width: 0,
-                gap: 2,
-              }}
-            >
-              {Array.from({ length: Math.floor(chartHeight / 5) }, (_, i) => (
-                <View key={i} style={{ width: 1, height: 3, backgroundColor: theme.colors.foregroundMuted }} />
-              ))}
-            </View>
-            <View
-              style={{
-                position: "absolute" as const,
-                top: 2,
-                left: Math.min(Math.max(4, focusIndex * slotWidth + slotWidth / 2 - 75), Math.max(4, width - 154)),
-                width: 150,
-                backgroundColor: theme.colors.surface2,
-                borderRadius: 8,
-                borderWidth: 1,
-                borderColor: theme.colors.border,
-                padding: 8,
-                gap: 2,
-                zIndex: 10,
-              }}
-            >
-              <Text style={{ color: theme.colors.foreground, fontSize: 11, fontWeight: "700" as const }}>{focused.date}</Text>
-              <Text style={{ color: theme.colors.foregroundMuted, fontSize: 10 }}>
-                {`in ${formatTokens(focused.inputTokens)} · out ${formatTokens(focused.outputTokens)}`}
-              </Text>
-              <Text style={{ color: theme.colors.foregroundMuted, fontSize: 10 }}>
-                {`$${focused.costUsd.toFixed(2)} · ${focused.sessions} sessions`}
-              </Text>
-            </View>
-          </>
-        ) : null}
+      <View onLayout={(event) => setWidth(event.nativeEvent.layout.width)}>
+        {scroll ? (
+          <ScrollView horizontal showsHorizontalScrollIndicator style={{ height: chartHeight }}>
+            {inner}
+          </ScrollView>
+        ) : (
+          inner
+        )}
       </View>
       <View style={{ flexDirection: "row", gap: 12 }}>
         <Legend color={theme.colors.accent} label="Input" theme={theme} />

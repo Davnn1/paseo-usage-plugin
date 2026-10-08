@@ -6,11 +6,14 @@ import { Pressable, RefreshControl, ScrollView, Text, TextInput, View } from "re
 import { Dashboard } from "./dashboard";
 import { usageDashboardRpc, usageRefreshRpc, usageSummaryRpc, type Period, type UsageEntry, type UsageSummaryOutput } from "../shared/usage";
 
-const PERIODS: { id: Period; label: string }[] = [
+const PERIODS: { id: Mode; label: string }[] = [
   { id: "1d", label: "1d" },
   { id: "7d", label: "7d" },
   { id: "30d", label: "30d" },
+  { id: "week", label: "Week" },
+  { id: "month", label: "Month" },
   { id: "all", label: "All" },
+  { id: "custom", label: "Custom" },
 ];
 
 type Mode = Period | "week" | "month" | "custom";
@@ -273,23 +276,6 @@ export function UsageScreen({ theme, layout, host }: PluginScreenProps) {
       >
         <View style={styles.periodRow}>
           {PERIODS.map((item) => (
-            <Pressable
-              key={item.id}
-              accessibilityRole="button"
-              accessibilityLabel={`Period ${item.label}`}
-              onPress={() => setMode(item.id)}
-              style={styles.periodButton(mode === item.id)}
-            >
-              <Text style={styles.periodText(mode === item.id)}>{item.label}</Text>
-            </Pressable>
-          ))}
-          {(
-            [
-              { id: "week" as Mode, label: "Week" },
-              { id: "month" as Mode, label: "Month" },
-              { id: "custom" as Mode, label: "Custom" },
-            ]
-          ).map((item) => (
             <Pressable
               key={item.id}
               accessibilityRole="button"

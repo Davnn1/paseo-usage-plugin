@@ -125,6 +125,12 @@ Temuan user: pill MUNCUL di mobile (fix icon Gauge terbukti) tapi (a) tap pill t
 4. **Bar chart flex width**: lebar bar mengikuti lebar container / jumlah segment (All = ratusan bar harus muat), bukan lebar statis.
 5. **Filter periode baru**: `Week` / `Month` + tombol ‹ › (geser minggu/bulan sebelum-sesudah) + `Custom` (pilih start/end). Keep "All". RPC extend: optional `startDate`/`endDate` (YYYY-MM-DD) override periode; week/month = sugar client yang ngitung range.
 
+## 11. FIX round UX (review user 2026-10-09 — layout RUSAK)
+1. **Repair heatmap**: balikin layout lama (cell fixed-size, horizontal scroll, grid rapat). Flex-width di round 10 meremuk grid jadi kolom sempit + tooltip melayang salah posisi. Tooltip card wajib anchor ke cell (clamp ke grid), bukan ngambang.
+2. **Trend bars DINAMIS + scrollable** (bukan shrink-to-fit): lebar bar = clamp(8px, container/segments, ~28px). Segmen sedikit → bar melebar (bahkan rata penuh); segmen banyak → bar min-width + **horizontal scroll** yang nyaman — JANGAN mengecil sampai "upil".
+3. **Hover INDEPENDEN per chart** (revert section 10 #2 — salah baca): heatmap & trend masing-masing punya focus sendiri, TIDAK terhubung.
+4. **Filter: kembalikan 1d/7d/30d** (user minta tetap ada) di samping Week/Month/Custom/All. Konsultasi UX agent soal redundansi → trim sesuai rekomendasi.
+
 ## Handoff (pindah device)
 - Repo: https://github.com/Davnn1/paseo-usage-plugin.git (branch `main`).
 - Install di mesin baru: `git clone` → `npm install` → cek `pluginsEnabled` di `~/.paseo/config.json` daemon lokal → `paseo plugin install ./usage` **dari parent folder (path RELATIF — path absolut = silent no-op, pitfall terverifikasi)** → `paseo plugin ls` harus `running`, cek kolom ERROR.
