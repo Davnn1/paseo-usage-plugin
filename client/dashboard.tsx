@@ -43,7 +43,10 @@ export function Dashboard({
   return (
     <View style={stylesGrid(compact)}>
       <View style={stylesCard(theme, compact)}>
-        <Text style={stylesCardTitle(theme)}>OVERVIEW</Text>
+        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+          <Text style={stylesCardTitle(theme)}>OVERVIEW</Text>
+          <Text style={{ color: theme.colors.foregroundMuted, fontSize: 10 }}>Last 365 days</Text>
+        </View>
         <Heatmap points={data.heatmapDaily} theme={theme} compact={compact} focus={heatFocus} onFocus={setHeatFocus} />
         {focusLine(heatFocus, "Hover or press a day for details.")}
       </View>

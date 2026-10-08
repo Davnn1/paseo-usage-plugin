@@ -338,55 +338,6 @@ export function UsageScreen({ theme, layout, host }: PluginScreenProps) {
           </View>
         ) : null}
 
-        {range ? (
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Previous range"
-              onPress={() => {
-                if (mode === "custom" && appliedCustom) {
-                  const days = Math.max(1, Math.round((Date.parse(appliedCustom.endDate) - Date.parse(appliedCustom.startDate)) / DAY_MS));
-                  const next = {
-                    startDate: dateKeyOf(Date.parse(appliedCustom.startDate) - days * DAY_MS),
-                    endDate: dateKeyOf(Date.parse(appliedCustom.endDate) - days * DAY_MS),
-                  };
-                  setAppliedCustom(next);
-                  setCustomStart(next.startDate);
-                  setCustomEnd(next.endDate);
-                } else {
-                  setAnchorMs((current) => shiftAnchor(mode, current, -1));
-                }
-              }}
-              style={styles.periodButton(false)}
-            >
-              <Text style={styles.periodText(false)}>‹</Text>
-            </Pressable>
-            <Text style={{ color: theme.colors.foreground, fontSize: 12 }}>
-              {range.startDate ?? "…"} → {range.endDate ?? "…"}
-            </Text>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Next range"
-              onPress={() => {
-                if (mode === "custom" && appliedCustom) {
-                  const days = Math.max(1, Math.round((Date.parse(appliedCustom.endDate) - Date.parse(appliedCustom.startDate)) / DAY_MS));
-                  const next = {
-                    startDate: dateKeyOf(Date.parse(appliedCustom.startDate) + days * DAY_MS),
-                    endDate: dateKeyOf(Date.parse(appliedCustom.endDate) + days * DAY_MS),
-                  };
-                  setAppliedCustom(next);
-                  setCustomStart(next.startDate);
-                  setCustomEnd(next.endDate);
-                } else {
-                  setAnchorMs((current) => shiftAnchor(mode, current, 1));
-                }
-              }}
-              style={styles.periodButton(false)}
-            >
-              <Text style={styles.periodText(false)}>›</Text>
-            </Pressable>
-          </View>
-        ) : null}
 
         {query.isError ? (
           <View>
