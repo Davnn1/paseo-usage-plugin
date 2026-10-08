@@ -13,7 +13,7 @@ Every entry shows the same Usage view (period selector, overview cards, dashboar
 | Entry | Where it appears |
 | --- | --- |
 | Workspace panel "Usage" | Tab beside agents and terminals; the surface that renders on every host including mobile |
-| Composer pill info | Per-agent track bar: tap shows the session title and one line of `in · out · cache-hit% · $cost` (daily fallback when the session is untracked). Info only — open Usage via the panel, Command Center, or sidebar |
+| Composer pill detail card | Per-agent track bar: tap opens a compact metric card (input, output, reasoning, cache read/write, cache hit with a progress bar, cost; daily fallback when the session is untracked). Info only — open Usage via the panel, Command Center, or sidebar |
 | Command Center "Open Usage" | ⌘K / Ctrl+K, in the workspace scope; opens the Usage panel |
 | Sidebar header row | Desktop sidebar header |
 | Sidebar footer row | Clients whose sidebar shows the footer area |

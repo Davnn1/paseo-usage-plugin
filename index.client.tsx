@@ -1,4 +1,4 @@
-import type { PluginButtonContentProps, PluginButtonMenuEntry, PluginButtonRegistration, PluginClientContext, PluginWorkspacePanelProps } from "@getpaseo/plugin/client";
+import type { PluginButtonContentProps, PluginButtonRegistration, PluginClientContext, PluginWorkspacePanelProps } from "@getpaseo/plugin/client";
 import type { PluginSidebarItemProps } from "@getpaseo/plugin/client";
 import { SidebarRow } from "@getpaseo/plugin/client/ui";
 import { Text, View } from "react-native";
@@ -55,47 +55,104 @@ interface PillData {
   daily: UsageTotals | null;
 }
 
+interface MetricRow {
+  id: string;
+  label: string;
+  value: string;
+  dotColor: string;
+  dotOpacity?: number;
+  /** When set, renders a progress bar under the label instead of a plain value. */
+  progressRatio?: number;
+}
+
 /**
- * Menu behavior is the surface that renders on every host (mobile included).
- * The sheet shows metric rows only, capitalized — the session title already
- * appears in the sheet header from the button title. No redirect action; the
- * full breakdown lives in the Usage panel/screen. `update({behavior})`
- * replaces the whole behavior on refresh.
+ * Popover Content: a compact two-column metric card. Popovers render as a
+ * bottom sheet on compact hosts. Data is read through the getter at render
+ * time, so refresh only needs registration.update() for label/title.
  */
-function buildPillMenu(data: PillData | undefined): PluginButtonMenuEntry[] {
-  const noop = { kind: "action" as const, onPress() {} };
-  const row = (id: string, title: string): PluginButtonMenuEntry => ({
-    kind: "item",
-    id,
-    title,
-    disabled: true,
-    behavior: noop,
-  });
-  if (data?.session?.found) {
-    const session = data.session;
-    return [
-      row("input", `Input · ${formatTokens(session.inputTokens)}`),
-      row("output", `Output · ${formatTokens(session.outputTokens)}`),
-      row("reasoning", `Reasoning · ${formatTokens(session.reasoningTokens)}`),
-      row("cache-read", `Cache Read · ${formatTokens(session.cacheReadTokens)}`),
-      row("cache-write", `Cache Write · ${formatTokens(session.cacheWriteTokens)}`),
-      row("cache-hit", `Cache Hit · ${(session.cacheHitRatio * 100).toFixed(1)}%`),
-      row("cost", `Cost · $${session.costUsd.toFixed(2)}`),
-    ];
-  }
-  if (data?.daily) {
-    const daily = data.daily;
-    return [
-      row("input", `Input · ${formatTokens(daily.inputTokens)}`),
-      row("output", `Output · ${formatTokens(daily.outputTokens)}`),
-      row("reasoning", `Reasoning · ${formatTokens(daily.reasoningTokens)}`),
-      row("cache-read", `Cache Read · ${formatTokens(daily.cacheReadTokens)}`),
-      row("cache-write", `Cache Write · ${formatTokens(daily.cacheWriteTokens)}`),
-      row("cache-hit", `Cache Hit · ${(daily.cacheHitRatio * 100).toFixed(1)}%`),
-      row("cost", `Cost · $${daily.costUsd.toFixed(2)}`),
-    ];
-  }
-  return [row("empty", "Usage unavailable")];
+function PillDetailCard({ data }: { data: () => PillData | undefined }) {
+  return function Content({ theme, layout }: PluginButtonContentProps) {
+    const current = data();
+    const compact = layout.compact;
+
+    let rows: MetricRow[];
+    if (current?.session?.found) {
+      const session = current.session;
+      rows = [
+        { id: "input", label: "Input", value: formatTokens(session.inputTokens), dotColor: theme.colors.statusSuccess },
+        { id: "output", label: "Output", value: formatTokens(session.outputTokens), dotColor: theme.colors.statusSuccess, dotOpacity: 0.55 },
+        { id: "reasoning", label: "Reasoning", value: formatTokens(session.reasoningTokens), dotColor: theme.colors.foregroundMuted },
+        { id: "cache-read", label: "Cache Read", value: formatTokens(session.cacheReadTokens), dotColor: theme.colors.border },
+        { id: "cache-write", label: "Cache Write", value: formatTokens(session.cacheWriteTokens), dotColor: theme.colors.border, dotOpacity: 0.6 },
+        { id: "cache-hit", label: "Cache Hit", value: `${(session.cacheHitRatio * 100).toFixed(1)}%`, dotColor: theme.colors.statusSuccess, progressRatio: session.cacheHitRatio },
+        { id: "cost", label: "Cost", value: `$${session.costUsd.toFixed(2)}`, dotColor: theme.colors.statusWarning },
+      ];
+    } else if (current?.daily) {
+      const daily = current.daily;
+      rows = [
+        { id: "input", label: "Input", value: formatTokens(daily.inputTokens), dotColor: theme.colors.statusSuccess },
+        { id: "output", label: "Output", value: formatTokens(daily.outputTokens), dotColor: theme.colors.statusSuccess, dotOpacity: 0.55 },
+        { id: "reasoning", label: "Reasoning", value: formatTokens(daily.reasoningTokens), dotColor: theme.colors.foregroundMuted },
+        { id: "cache-read", label: "Cache Read", value: formatTokens(daily.cacheReadTokens), dotColor: theme.colors.border },
+        { id: "cache-write", label: "Cache Write", value: formatTokens(daily.cacheWriteTokens), dotColor: theme.colors.border, dotOpacity: 0.6 },
+        { id: "cache-hit", label: "Cache Hit", value: `${(daily.cacheHitRatio * 100).toFixed(1)}%`, dotColor: theme.colors.statusSuccess, progressRatio: daily.cacheHitRatio },
+        { id: "cost", label: "Cost", value: `$${daily.costUsd.toFixed(2)}`, dotColor: theme.colors.statusWarning },
+      ];
+    } else {
+      return (
+        <View style={{ padding: 14, minWidth: 220, maxWidth: 300 }}>
+          <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>Usage unavailable</Text>
+        </View>
+      );
+    }
+
+    return (
+      <View
+        style={{
+          backgroundColor: theme.colors.surface1,
+          borderRadius: 12,
+          padding: compact ? 12 : 14,
+          gap: compact ? 7 : 9,
+          minWidth: 240,
+          maxWidth: 300,
+        }}
+      >
+        {rows.map((rowMetric) => (
+          <View key={rowMetric.id} style={{ gap: 3 }}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 7 }}>
+              <View
+                style={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: 4,
+                  backgroundColor: rowMetric.dotColor,
+                  opacity: rowMetric.dotOpacity ?? 1,
+                }}
+              />
+              <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12, flex: 1 }}>{rowMetric.label}</Text>
+              <Text style={{ color: theme.colors.foreground, fontSize: 12, fontWeight: "600" as const, textAlign: "right" as const }}>
+                {rowMetric.value}
+              </Text>
+            </View>
+            {rowMetric.progressRatio !== undefined ? (
+              <View style={{ marginLeft: 15 }}>
+                <View style={{ height: 3, borderRadius: 2, backgroundColor: theme.colors.border, overflow: "hidden" }}>
+                  <View
+                    style={{
+                      height: 3,
+                      width: `${Math.min(100, Math.max(0, rowMetric.progressRatio * 100))}%`,
+                      borderRadius: 2,
+                      backgroundColor: theme.colors.statusSuccess,
+                    }}
+                  />
+                </View>
+              </View>
+            ) : null}
+          </View>
+        ))}
+      </View>
+    );
+  };
 }
 
 /**
@@ -138,15 +195,9 @@ function contributeUsagePill(client: PluginClientContext) {
       }
     }
     if (lifetime.signal.aborted || !pills.has(agentId)) return;
-    const data: PillData = { session, daily };
-    latest.set(agentId, data);
+    latest.set(agentId, { session, daily });
     try {
-      registration.update({
-        label: buildPillText(session, daily).label,
-        title: "Usage",
-        icon: "Gauge",
-        behavior: { kind: "menu", items: buildPillMenu(data) },
-      });
+      registration.update({ label: buildPillText(session, daily).label, title: "Usage", icon: "Gauge" });
     } catch (error) {
       console.error("[usage] pill update failed", error);
     }
@@ -166,7 +217,7 @@ function contributeUsagePill(client: PluginClientContext) {
           title: "Usage",
           icon: "Gauge",
           label: "…",
-          behavior: { kind: "menu", items: buildPillMenu(latest.get(agentId)) },
+          behavior: { kind: "popover", Content: PillDetailCard({ data: () => latest.get(agentId) }) },
         },
       });
       pills.set(agentId, registration);
