@@ -34,14 +34,14 @@ export default function contribute(server: PluginServerContext) {
     return request;
   });
 
-  server.handle(usageSummaryRpc, async ({ period }: RpcInput<typeof usageSummaryRpc>, { paseo }) =>
-    aggregator.summarize(period, { providerEntries: await providerSnapshot(paseo) }),
+  server.handle(usageSummaryRpc, async ({ period, startDate, endDate }: RpcInput<typeof usageSummaryRpc>, { paseo }) =>
+    aggregator.summarize(period, { providerEntries: await providerSnapshot(paseo), startDate, endDate }),
   );
-  server.handle(usageRefreshRpc, async ({ period }: RpcInput<typeof usageRefreshRpc>, { paseo }) =>
-    aggregator.refresh(period, { providerEntries: await providerSnapshot(paseo) }).summary,
+  server.handle(usageRefreshRpc, async ({ period, startDate, endDate }: RpcInput<typeof usageRefreshRpc>, { paseo }) =>
+    aggregator.refresh(period, { providerEntries: await providerSnapshot(paseo), startDate, endDate }).summary,
   );
-  server.handle(usageDashboardRpc, async ({ period }: RpcInput<typeof usageDashboardRpc>, { paseo }) =>
-    aggregator.dashboard(period, { providerEntries: await providerSnapshot(paseo) }),
+  server.handle(usageDashboardRpc, async ({ period, startDate, endDate }: RpcInput<typeof usageDashboardRpc>, { paseo }) =>
+    aggregator.dashboard(period, { providerEntries: await providerSnapshot(paseo), startDate, endDate }),
   );
   server.handle(usageSessionSummaryRpc, ({ agentId }: RpcInput<typeof usageSessionSummaryRpc>) =>
     resolveSessionSummary(agentId),

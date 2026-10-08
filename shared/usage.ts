@@ -72,7 +72,13 @@ export const providerEntrySchema = z.object({
 });
 export type ProviderEntry = z.infer<typeof providerEntrySchema>;
 
-export const usageSummaryInputSchema = z.object({ period: periodSchema });
+const dateBoundSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional();
+export const usageSummaryInputSchema = z.object({
+  period: periodSchema,
+  /** Inclusive YYYY-MM-DD (UTC) range; overrides the sliding period window. */
+  startDate: dateBoundSchema,
+  endDate: dateBoundSchema,
+});
 export const usageSummaryOutputSchema = z.object({
   period: periodSchema,
   generatedAtMs: z.number(),
@@ -96,7 +102,7 @@ export const usageSummaryRpc = defineRpc({
 
 export const usageRefreshRpc = defineRpc({
   name: "usage.refresh",
-  input: z.object({ period: periodSchema }),
+  input: usageSummaryInputSchema,
   output: usageSummaryOutputSchema,
 });
 
@@ -157,7 +163,7 @@ export type UsageDashboardOutput = z.infer<typeof usageDashboardOutputSchema>;
 
 export const usageDashboardRpc = defineRpc({
   name: "usage.dashboard",
-  input: z.object({ period: periodSchema }),
+  input: usageSummaryInputSchema,
   output: usageDashboardOutputSchema,
 });
 
@@ -260,7 +266,7 @@ export function dailyTokens(point: Pick<DailyPoint, "inputTokens" | "outputToken
  * windowDays null covers everything from the earliest row through today;
  * otherwise the window ends at nowMs. All dates UTC.
  */
-export function bucketDaily(rows: UsageRow[], windowDays: number | null, nowMs: number): DailyPoint[] {
+export function bucketDaily(rows: UsageRow[], windowDays: number | null, nowMs: number, endMs?: number): DailyPoint[] {
   const byDay = new Map<string, DailyPoint>();
   let earliest = Number.POSITIVE_INFINITY;
   for (const row of rows) {
@@ -278,7 +284,8 @@ export function bucketDaily(rows: UsageRow[], windowDays: number | null, nowMs: 
     point.sessions += 1;
   }
 
-  const today = dayStartUtc(nowMs);
+  const last = endMs ?? nowMs;
+  const today = dayStartUtc(last);
   const start = windowDays === null
     ? (Number.isFinite(earliest) ? dayStartUtc(earliest) : today)
     : today - (windowDays - 1) * DAY_MS;
@@ -347,6 +354,49 @@ export function filterPeriod(rows: UsageRow[], period: Period, nowMs: number): U
   if (period === "all") return rows;
   const cutoff = nowMs - PERIOD_MS[period];
   return rows.filter((row) => row.timestampMs >= cutoff);
+}
+
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Inclusive UTC date-range filter; either bound optional. Unparseable bounds are ignored. */
+export function filterDateRange(
+  rows: UsageRow[],
+  startDate?: string,
+  endDate?: string,
+): UsageRow[] {
+  if (!startDate && !endDate) return rows;
+  const startMs = startDate && DATE_RE.test(startDate) ? Date.parse(`${startDate}T00:00:00.000Z`) : Number.NEGATIVE_INFINITY;
+  const endMs = endDate && DATE_RE.test(endDate) ? Date.parse(`${endDate}T23:59:59.999Z`) : Number.POSITIVE_INFINITY;
+  return rows.filter((row) => row.timestampMs >= startMs && row.timestampMs <= endMs);
+}
+
+/**
+ * The aggregator's row selection: an explicit YYYY-MM-DD range overrides the
+ * sliding period window. Range bounds are inclusive.
+ */
+export function selectPeriodRows(
+  rows: UsageRow[],
+  period: Period,
+  nowMs: number,
+  startDate?: string,
+  endDate?: string,
+): UsageRow[] {
+  if (startDate || endDate) return filterDateRange(rows, startDate, endDate);
+  return filterPeriod(rows, period, nowMs);
+}
+
+/** Inclusive day count of a date range (both bounds required). */
+export function dateRangeDays(startDate: string, endDate: string): number {
+  const start = Date.parse(`${startDate}T00:00:00Z`);
+  const end = Date.parse(`${endDate}T00:00:00Z`);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return 1;
+  return Math.round((end - start) / DAY_MS) + 1;
+}
+
+/** End-of-day epoch ms for a YYYY-MM-DD bound (falls back to nowMs). */
+export function rangeEndMs(endDate: string | undefined, nowMs: number): number {
+  if (endDate && DATE_RE.test(endDate)) return Date.parse(`${endDate}T23:59:59.999Z`);
+  return nowMs;
 }
 
 /**

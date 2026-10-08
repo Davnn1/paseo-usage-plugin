@@ -118,6 +118,13 @@ Temuan user: pill MUNCUL di mobile (fix icon Gauge terbukti) tapi (a) tap pill t
 2. **Sidebar item mobile + fallback entry**: tambah `addSidebarFooterItem` DAN `addCommandCenterItem` ("Open Usage", openScreen) sebagai jalur alternatif buka screen di semua client. Investigasi kenapa header item tidak render di mobile (mobile layout mungkin tidak menampilkan sidebar header items — laporkan jujur kalau itu keputusan host).
 3. Semua entry point (sidebar header/footer, command center, pill) arahkan ke screen yang sama; dokumentasikan di OVERVIEW.md entry mana yang tersedia per platform.
 
+## 10. UX round (review user 2026-10-09, referensi: dashboard DeepSeek)
+1. **Crosshair + floating tooltip** di bar chart (Model Usage Over Time, Weekly): hover bar → garis vertikal dashed di posisi bar + tooltip card melayang (tanggal + nilai per seri) — gaya DeepSeek. RN: absolute-positioned View (dash = segmented views), posisi dari koordinat bar via onLayout.
+2. **Hover terhubung** Overview ↔ Model Usage Over Time: state hoveredDate di parent Dashboard — hover tanggal di heatmap → bar tanggal sama highlight di trend chart (dan sebaliknya).
+3. **Heatmap hover = floating card**: tooltip card (tanggal + in/out/cost/sesi) melayang dekat cell, bukan cuma detail line bawah kartu. Detail line tetap fallback untuk mobile press.
+4. **Bar chart flex width**: lebar bar mengikuti lebar container / jumlah segment (All = ratusan bar harus muat), bukan lebar statis.
+5. **Filter periode baru**: `Week` / `Month` + tombol ‹ › (geser minggu/bulan sebelum-sesudah) + `Custom` (pilih start/end). Keep "All". RPC extend: optional `startDate`/`endDate` (YYYY-MM-DD) override periode; week/month = sugar client yang ngitung range.
+
 ## Handoff (pindah device)
 - Repo: https://github.com/Davnn1/paseo-usage-plugin.git (branch `main`).
 - Install di mesin baru: `git clone` → `npm install` → cek `pluginsEnabled` di `~/.paseo/config.json` daemon lokal → `paseo plugin install ./usage` **dari parent folder (path RELATIF — path absolut = silent no-op, pitfall terverifikasi)** → `paseo plugin ls` harus `running`, cek kolom ERROR.

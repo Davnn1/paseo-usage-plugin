@@ -3,8 +3,11 @@ import {
   bucketDaily,
   bucketProviderCost,
   bucketWeekly,
+  dateRangeDays,
   filterPeriod,
   mostActiveDay,
+  rangeEndMs,
+  selectPeriodRows,
   type Period,
   type ProviderEntry,
   type SourceStatus,
@@ -33,51 +36,65 @@ interface BuildResult {
   dashboard: UsageDashboardOutput;
 }
 
+interface RangeOptions {
+  startDate?: string;
+  endDate?: string;
+}
+
 interface CacheEntry {
   generatedAtMs: number;
   result: BuildResult;
 }
 
-export class UsageAggregator {
-  private readonly cache = new Map<Period, CacheEntry>();
+function cacheKey(period: Period, range: RangeOptions): string {
+  return `${period}|${range.startDate ?? ""}|${range.endDate ?? ""}`;
+}
 
-  /** Force re-aggregation and overwrite the cache entry for a period. */
+export class UsageAggregator {
+  private readonly cache = new Map<string, CacheEntry>();
+
+  /** Force re-aggregation and overwrite the cache entry for a period/range. */
   refresh(
     period: Period,
-    options: { providerEntries?: ProviderEntry[]; nowMs?: number } = {},
+    options: { providerEntries?: ProviderEntry[]; nowMs?: number } & RangeOptions = {},
   ): BuildResult {
     const nowMs = options.nowMs ?? Date.now();
-    const result = this.build(period, nowMs, options.providerEntries);
-    this.cache.set(period, { generatedAtMs: nowMs, result });
+    const result = this.build(period, nowMs, options);
+    this.cache.set(cacheKey(period, options), { generatedAtMs: nowMs, result });
     return result;
   }
 
   /** Cached read; re-aggregates when the entry is missing or older than the TTL. */
   private cached(
     period: Period,
-    options: { providerEntries?: ProviderEntry[]; nowMs?: number } = {},
+    options: { providerEntries?: ProviderEntry[]; nowMs?: number } & RangeOptions = {},
   ): BuildResult {
     const nowMs = options.nowMs ?? Date.now();
-    const hit = this.cache.get(period);
+    const hit = this.cache.get(cacheKey(period, options));
     if (hit && nowMs - hit.generatedAtMs < CACHE_TTL_MS) return hit.result;
     return this.refresh(period, { ...options, nowMs });
   }
 
   summarize(
     period: Period,
-    options: { providerEntries?: ProviderEntry[]; nowMs?: number } = {},
+    options: { providerEntries?: ProviderEntry[]; nowMs?: number } & RangeOptions = {},
   ): UsageSummaryOutput {
     return this.cached(period, options).summary;
   }
 
   dashboard(
     period: Period,
-    options: { providerEntries?: ProviderEntry[]; nowMs?: number } = {},
+    options: { providerEntries?: ProviderEntry[]; nowMs?: number } & RangeOptions = {},
   ): UsageDashboardOutput {
     return this.cached(period, options).dashboard;
   }
 
-  private build(period: Period, nowMs: number, providerEntries?: ProviderEntry[]): BuildResult {
+  private build(
+    period: Period,
+    nowMs: number,
+    options: { providerEntries?: ProviderEntry[] } & RangeOptions,
+  ): BuildResult {
+    const { startDate, endDate, providerEntries } = options;
     const adapterSources: SourceStatus[] = [];
     const rows: UsageRow[] = [];
 
@@ -153,7 +170,7 @@ export class UsageAggregator {
             : []),
         ];
 
-    const filtered = filterPeriod(rows, period, nowMs);
+    const filtered = selectPeriodRows(rows, period, nowMs, startDate, endDate);
     const { totals, entries } = aggregateUsage(filtered);
 
     const byProviderMap = new Map<string, { backend: string; provider: string; entries: UsageEntry[] }>();
@@ -175,7 +192,13 @@ export class UsageAggregator {
       sources,
     };
 
-    const daily = bucketDaily(filtered, PERIOD_WINDOW_DAYS[period], nowMs);
+    const rangeDays = startDate && endDate ? dateRangeDays(startDate, endDate) : null;
+    const daily = bucketDaily(
+      filtered,
+      rangeDays ?? PERIOD_WINDOW_DAYS[period],
+      nowMs,
+      rangeEndMs(endDate, nowMs),
+    );
     const dashboard: UsageDashboardOutput = {
       period,
       generatedAtMs: nowMs,

@@ -2,7 +2,7 @@ import { useRpc } from "@getpaseo/plugin/client";
 import type { PluginScreenProps } from "@getpaseo/plugin/client";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
-import { Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
+import { Pressable, RefreshControl, ScrollView, Text, TextInput, View } from "react-native";
 import { Dashboard } from "./dashboard";
 import { usageDashboardRpc, usageRefreshRpc, usageSummaryRpc, type Period, type UsageEntry, type UsageSummaryOutput } from "../shared/usage";
 
@@ -12,6 +12,39 @@ const PERIODS: { id: Period; label: string }[] = [
   { id: "30d", label: "30d" },
   { id: "all", label: "All" },
 ];
+
+type Mode = Period | "week" | "month" | "custom";
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const dateKeyOf = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+
+/** Monday-first ISO week containing the anchor (UTC). */
+function weekRange(anchorMs: number): { startDate: string; endDate: string } {
+  const d = new Date(anchorMs);
+  const day = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+  const mondayOffset = (new Date(day).getUTCDay() + 6) % 7;
+  const start = day - mondayOffset * DAY_MS;
+  return { startDate: dateKeyOf(start), endDate: dateKeyOf(start + 6 * DAY_MS) };
+}
+
+/** Calendar month containing the anchor (UTC). */
+function monthRange(anchorMs: number): { startDate: string; endDate: string } {
+  const d = new Date(anchorMs);
+  const year = d.getUTCFullYear();
+  const month = d.getUTCMonth();
+  const start = Date.UTC(year, month, 1);
+  const end = Date.UTC(year, month + 1, 0);
+  return { startDate: dateKeyOf(start), endDate: dateKeyOf(end) };
+}
+
+function shiftAnchor(mode: Mode, anchorMs: number, direction: -1 | 1): number {
+  if (mode === "week") return anchorMs + direction * 7 * DAY_MS;
+  if (mode === "month") {
+    const d = new Date(anchorMs);
+    return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + direction, 1);
+  }
+  return anchorMs + direction * 7 * DAY_MS;
+}
 
 function formatTokens(value: number): string {
   if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(1)}B`;
@@ -29,27 +62,42 @@ function formatPercent(value: number): string {
 }
 
 export function UsageScreen({ theme, layout, host }: PluginScreenProps) {
-  const [period, setPeriod] = useState<Period>("30d");
+  const [mode, setMode] = useState<Mode>("30d");
+  const [anchorMs, setAnchorMs] = useState(() => Date.now());
+  const [customStart, setCustomStart] = useState("");
+  const [customEnd, setCustomEnd] = useState("");
+  const [appliedCustom, setAppliedCustom] = useState<{ startDate: string; endDate: string } | null>(null);
   const [showDisabled, setShowDisabled] = useState(false);
   const [tableWidth, setTableWidth] = useState(0);
+
+  const range: { startDate?: string; endDate?: string } | undefined =
+    mode === "week"
+      ? weekRange(anchorMs)
+      : mode === "month"
+        ? monthRange(anchorMs)
+        : mode === "custom"
+          ? appliedCustom ?? undefined
+          : undefined;
+  const period: Period = mode === "week" || mode === "month" || mode === "custom" ? "all" : mode;
+  const rangeKey = range ? `${range.startDate ?? ""}|${range.endDate ?? ""}` : "";
   const fetchSummary = useRpc(usageSummaryRpc);
   const fetchDashboard = useRpc(usageDashboardRpc);
   const fetchRefresh = useRpc(usageRefreshRpc);
   const queryClient = useQueryClient();
 
   const query = useQuery({
-    queryKey: ["usage", "summary", period],
-    queryFn: () => fetchSummary({ period }),
+    queryKey: ["usage", "summary", period, rangeKey],
+    queryFn: () => fetchSummary({ period, ...range }),
   });
   const dashboardQuery = useQuery({
-    queryKey: ["usage", "dashboard", period],
-    queryFn: () => fetchDashboard({ period }),
+    queryKey: ["usage", "dashboard", period, rangeKey],
+    queryFn: () => fetchDashboard({ period, ...range }),
   });
   const refresh = useMutation({
-    mutationFn: (target: Period) => fetchRefresh({ period: target }),
-    onSuccess: (data, target) => {
-      queryClient.setQueryData(["usage", "summary", target], data);
-      void queryClient.invalidateQueries({ queryKey: ["usage", "dashboard", target] });
+    mutationFn: () => fetchRefresh({ period, ...range }),
+    onSuccess: (data) => {
+      queryClient.setQueryData(["usage", "summary", period, rangeKey], data);
+      void queryClient.invalidateQueries({ queryKey: ["usage", "dashboard", period, rangeKey] });
     },
   });
 
@@ -218,7 +266,7 @@ export function UsageScreen({ theme, layout, host }: PluginScreenProps) {
         refreshControl={
           <RefreshControl
             refreshing={refresh.isPending}
-            onRefresh={() => refresh.mutate(period)}
+            onRefresh={() => refresh.mutate()}
             tintColor={theme.colors.foregroundMuted}
           />
         }
@@ -229,13 +277,130 @@ export function UsageScreen({ theme, layout, host }: PluginScreenProps) {
               key={item.id}
               accessibilityRole="button"
               accessibilityLabel={`Period ${item.label}`}
-              onPress={() => setPeriod(item.id)}
-              style={styles.periodButton(period === item.id)}
+              onPress={() => setMode(item.id)}
+              style={styles.periodButton(mode === item.id)}
             >
-              <Text style={styles.periodText(period === item.id)}>{item.label}</Text>
+              <Text style={styles.periodText(mode === item.id)}>{item.label}</Text>
+            </Pressable>
+          ))}
+          {(
+            [
+              { id: "week" as Mode, label: "Week" },
+              { id: "month" as Mode, label: "Month" },
+              { id: "custom" as Mode, label: "Custom" },
+            ]
+          ).map((item) => (
+            <Pressable
+              key={item.id}
+              accessibilityRole="button"
+              accessibilityLabel={`Period ${item.label}`}
+              onPress={() => setMode(item.id)}
+              style={styles.periodButton(mode === item.id)}
+            >
+              <Text style={styles.periodText(mode === item.id)}>{item.label}</Text>
             </Pressable>
           ))}
         </View>
+
+        {mode === "custom" ? (
+          <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
+            <TextInput
+              value={customStart}
+              onChangeText={setCustomStart}
+              placeholder="YYYY-MM-DD"
+              placeholderTextColor={theme.colors.foregroundMuted}
+              style={{
+                flex: 1,
+                borderWidth: 1,
+                borderColor: theme.colors.border,
+                borderRadius: 8,
+                paddingHorizontal: 10,
+                paddingVertical: 6,
+                color: theme.colors.foreground,
+                fontSize: 12,
+              }}
+            />
+            <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>→</Text>
+            <TextInput
+              value={customEnd}
+              onChangeText={setCustomEnd}
+              placeholder="YYYY-MM-DD"
+              placeholderTextColor={theme.colors.foregroundMuted}
+              style={{
+                flex: 1,
+                borderWidth: 1,
+                borderColor: theme.colors.border,
+                borderRadius: 8,
+                paddingHorizontal: 10,
+                paddingVertical: 6,
+                color: theme.colors.foreground,
+                fontSize: 12,
+              }}
+            />
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Apply custom date range"
+              onPress={() => {
+                if (/^\d{4}-\d{2}-\d{2}$/.test(customStart) && /^\d{4}-\d{2}-\d{2}$/.test(customEnd)) {
+                  setAppliedCustom({ startDate: customStart, endDate: customEnd });
+                }
+              }}
+              style={styles.periodButton(true)}
+            >
+              <Text style={styles.periodText(true)}>Apply</Text>
+            </Pressable>
+          </View>
+        ) : null}
+
+        {range ? (
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Previous range"
+              onPress={() => {
+                if (mode === "custom" && appliedCustom) {
+                  const days = Math.max(1, Math.round((Date.parse(appliedCustom.endDate) - Date.parse(appliedCustom.startDate)) / DAY_MS));
+                  const next = {
+                    startDate: dateKeyOf(Date.parse(appliedCustom.startDate) - days * DAY_MS),
+                    endDate: dateKeyOf(Date.parse(appliedCustom.endDate) - days * DAY_MS),
+                  };
+                  setAppliedCustom(next);
+                  setCustomStart(next.startDate);
+                  setCustomEnd(next.endDate);
+                } else {
+                  setAnchorMs((current) => shiftAnchor(mode, current, -1));
+                }
+              }}
+              style={styles.periodButton(false)}
+            >
+              <Text style={styles.periodText(false)}>‹</Text>
+            </Pressable>
+            <Text style={{ color: theme.colors.foreground, fontSize: 12 }}>
+              {range.startDate ?? "…"} → {range.endDate ?? "…"}
+            </Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Next range"
+              onPress={() => {
+                if (mode === "custom" && appliedCustom) {
+                  const days = Math.max(1, Math.round((Date.parse(appliedCustom.endDate) - Date.parse(appliedCustom.startDate)) / DAY_MS));
+                  const next = {
+                    startDate: dateKeyOf(Date.parse(appliedCustom.startDate) + days * DAY_MS),
+                    endDate: dateKeyOf(Date.parse(appliedCustom.endDate) + days * DAY_MS),
+                  };
+                  setAppliedCustom(next);
+                  setCustomStart(next.startDate);
+                  setCustomEnd(next.endDate);
+                } else {
+                  setAnchorMs((current) => shiftAnchor(mode, current, 1));
+                }
+              }}
+              style={styles.periodButton(false)}
+            >
+              <Text style={styles.periodText(false)}>›</Text>
+            </Pressable>
+          </View>
+        ) : null}
 
         {query.isError ? (
           <View>

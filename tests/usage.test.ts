@@ -597,3 +597,59 @@ test("mapSourceStatus: antigravity used via proxied calls when store is empty", 
   assert.equal(source.status, "used");
   assert.match(source.detail ?? "", /proxied LLM calls/);
 });
+
+// ---------------------------------------------------------------------------
+// Date-range filter (Week/Month/Custom)
+// ---------------------------------------------------------------------------
+
+import { dateRangeDays, dateKeyUtc, filterDateRange, rangeEndMs, selectPeriodRows } from "../shared/usage";
+
+test("filterDateRange is inclusive on both bounds and optional per side", () => {
+  const dayRows = [
+    row({ timestampMs: Date.parse("2026-10-05T00:00:00.000Z") }),
+    row({ timestampMs: Date.parse("2026-10-05T23:59:59.999Z") }),
+    row({ timestampMs: Date.parse("2026-10-06T12:00:00.000Z") }),
+    row({ timestampMs: Date.parse("2026-10-07T00:00:00.000Z") }),
+  ];
+  assert.equal(filterDateRange(dayRows, "2026-10-05", "2026-10-07").length, 4);
+  assert.equal(filterDateRange(dayRows, "2026-10-06", "2026-10-06").length, 1);
+  assert.equal(filterDateRange(dayRows, undefined, "2026-10-05").length, 2);
+  assert.equal(filterDateRange(dayRows, "2026-10-06", undefined).length, 2);
+  assert.equal(filterDateRange(dayRows, "bogus", "also-bogus").length, 4); // unparseable ignored
+});
+
+test("selectPeriodRows: range overrides the sliding period window", () => {
+  const rows = [
+    row({ timestampMs: NOW - 40 * DAY }), // outside 30d window, inside range
+    row({ timestampMs: NOW - 2 * DAY }), // inside both
+  ];
+  assert.equal(selectPeriodRows(rows, "30d", NOW).length, 1);
+  const start = dateKeyUtc(NOW - 45 * DAY);
+  const end = dateKeyUtc(NOW);
+  const ranged = selectPeriodRows(rows, "30d", NOW, start, end);
+  assert.equal(ranged.length, 2); // override pulls the older row in
+});
+
+test("dateRangeDays and rangeEndMs helpers", () => {
+  assert.equal(dateRangeDays("2026-10-01", "2026-10-07"), 7);
+  assert.equal(dateRangeDays("2026-10-07", "2026-10-01"), 1); // invalid -> 1
+  assert.equal(rangeEndMs("2026-10-07", NOW), Date.parse("2026-10-07T23:59:59.999Z"));
+  assert.equal(rangeEndMs(undefined, NOW), NOW);
+});
+
+test("aggregator honors startDate/endDate with inclusive boundaries (live db)", async () => {
+  const { UsageAggregator } = await import("../server/aggregator");
+  const aggregator = new UsageAggregator();
+  const today = dateKeyUtc(Date.now());
+  const single = aggregator.summarize("all", { startDate: today, endDate: today });
+  const summary = aggregator.summarize("all", {});
+  assert.ok(single.totals.sessions <= summary.totals.sessions);
+  assert.ok(single.totals.inputTokens <= summary.totals.inputTokens);
+  // boundary: yesterday-only range must not include today's rows
+  const yesterday = dateKeyUtc(Date.now() - DAY);
+  const yOnly = aggregator.summarize("all", { startDate: yesterday, endDate: yesterday });
+  const yPlusToday = aggregator.summarize("all", { startDate: yesterday, endDate: today });
+  assert.ok(yOnly.totals.sessions <= yPlusToday.totals.sessions);
+  const withFuture = aggregator.summarize("all", { startDate: "2999-01-01", endDate: "2999-01-02" });
+  assert.equal(withFuture.totals.sessions, 0);
+});
