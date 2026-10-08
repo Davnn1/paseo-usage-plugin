@@ -833,10 +833,15 @@ test("antigravity session attribution matches conversationId or agentId", () => 
   assert.equal(byAgentTag.ctx?.usedTokens, 5);
 });
 
-test("buildPillText appends ctx suffix only when present", () => {
+test("buildPillText: ctx meter label (used/window-pct) with usage fallback", () => {
   const withCtx = buildPillText({ ...sessionFound, ctx: { usedTokens: 131_072, windowTokens: 262_144, pct: 50 } }, null);
-  assert.match(withCtx.label, /·ctx 50%$/);
+  assert.equal(withCtx.label, "131.1K/262.1K-50%");
   assert.match(withCtx.title, /ctx 131\.1K\/262\.1K \(50%\)/);
-  const withoutCtx = buildPillText(sessionFound, null);
+
+  const gemini = buildPillText({ ...sessionFound, ctx: { usedTokens: 635_200, windowTokens: 1_048_576, pct: 63 } }, null);
+  assert.equal(gemini.label, "635.2K/1M-63%"); // window trims the trailing .0
+
+  const withoutCtx = buildPillText(sessionFound, null); // ctx null -> usage fallback
+  assert.equal(withoutCtx.label, "1.5M/60.0K·90%");
   assert.doesNotMatch(withoutCtx.label, /ctx/);
 });

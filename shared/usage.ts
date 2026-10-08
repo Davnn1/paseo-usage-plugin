@@ -210,6 +210,19 @@ function compactTokens(value: number): string {
   return String(Math.round(value));
 }
 
+/** Window sizes read cleaner without a trailing .0 (1M, 200K, 131K). */
+function compactWindow(value: number): string {
+  if (value >= 1_000_000) {
+    const m = value / 1_000_000;
+    return `${m.toFixed(1).replace(/\.0$/, "")}M`;
+  }
+  if (value >= 1_000) {
+    const k = value / 1_000;
+    return `${k.toFixed(1).replace(/\.0$/, "")}K`;
+  }
+  return String(value);
+}
+
 export interface PillText {
   label: string;
   title: string;
@@ -226,9 +239,13 @@ export function buildPillText(
   daily: UsageTotals | null,
 ): PillText {
   if (session?.found) {
-    const ctxSuffix = session.ctx ? `·ctx ${Math.round(session.ctx.pct)}%` : "";
+    // Primary: the context window meter (used/window-pct). Fallback: usage
+    // summary when no context data exists — never blank.
+    const label = session.ctx
+      ? `${compactTokens(session.ctx.usedTokens)}/${compactWindow(session.ctx.windowTokens)}-${Math.round(session.ctx.pct)}%`
+      : `${compactTokens(session.inputTokens)}/${compactTokens(session.outputTokens)}·${(session.cacheHitRatio * 100).toFixed(0)}%`;
     return {
-      label: `${compactTokens(session.inputTokens)}/${compactTokens(session.outputTokens)}·${(session.cacheHitRatio * 100).toFixed(0)}%${ctxSuffix}`,
+      label,
       title:
         `Session: ${session.title || "untitled"} — ${compactTokens(session.inputTokens)} in / ${compactTokens(session.outputTokens)} out ` +
         `(reasoning ${compactTokens(session.reasoningTokens)}), cache read ${compactTokens(session.cacheReadTokens)}, ` +
