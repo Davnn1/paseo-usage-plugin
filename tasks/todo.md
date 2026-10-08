@@ -88,6 +88,15 @@ Tambah section dashboard DI ATAS tabel:
 ## 4. Acceptance lanjutan
 typecheck pass · test lama+baru pass (weekly bucketing, mostActiveDay, daily gap-fill) · `paseo plugin reload usage` running ERROR kosong · verify script existing TIDAK berubah · audit RN-only (zero DOM) · compact layout dicek.
 
+## 5. Composer pill "current usage" (ide user 2026-10-08 malam)
+Pill per-agent di composer track bar (sejajar pill MCP & Subagents) via `addComposerPill`:
+- Label compact usage periode berjalan (default 1d): in / out / cache-hit% / total (cost) — mis. `12.4M/1.2M · 92% · $12` (title/tooltip = breakdown lengkap).
+- onPress → `openScreen({ screenId: "usage" })`.
+- Data: `useRpc(usage.summary {period:"1d"})` + TanStack Query `refetchInterval` 60s (server cache TTL 5 menit sudah ada; pill cukup baca cache).
+- Registrasi WAJIB owned list subscription: `client.paseo.agents.list({ subscribe: {}, signal })` → `subscription.subscribe({ snapshot, update })` + AbortController cleanup. JANGAN `agents.subscribe(cb)` (listener kosong — lessons:paseo-plugin-09).
+- Pill API return `{ update, remove }` (bukan remover polos); `remove()` idempotent; cleanup = remove semua pill + abort.
+- Reload/reconnect: snapshot ulang = daftar ulang pill, jangan duplikat.
+
 ## Handoff (pindah device)
 - Repo: https://github.com/Davnn1/paseo-usage-plugin.git (branch `main`).
 - Install di mesin baru: `git clone` → `npm install` → cek `pluginsEnabled` di `~/.paseo/config.json` daemon lokal → `paseo plugin install ./usage` **dari parent folder (path RELATIF — path absolut = silent no-op, pitfall terverifikasi)** → `paseo plugin ls` harus `running`, cek kolom ERROR.

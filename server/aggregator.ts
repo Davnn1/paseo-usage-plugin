@@ -1,11 +1,16 @@
 import {
   aggregateUsage,
+  bucketDaily,
+  bucketProviderCost,
+  bucketWeekly,
   filterPeriod,
+  mostActiveDay,
   type Period,
   type ProviderEntry,
   type SourceStatus,
   type UsageEntry,
   type UsageRow,
+  type UsageDashboardOutput,
   type UsageSummaryOutput,
 } from "../shared/usage";
 import { readOpenCodeRows } from "./adapters/opencode";
@@ -15,9 +20,21 @@ import { backendForProvider, mapSourceStatus } from "./discovery";
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
+const PERIOD_WINDOW_DAYS: Record<Period, number | null> = {
+  "1d": 1,
+  "7d": 7,
+  "30d": 30,
+  all: null,
+};
+
+interface BuildResult {
+  summary: UsageSummaryOutput;
+  dashboard: UsageDashboardOutput;
+}
+
 interface CacheEntry {
   generatedAtMs: number;
-  result: UsageSummaryOutput;
+  result: BuildResult;
 }
 
 export class UsageAggregator {
@@ -27,24 +44,39 @@ export class UsageAggregator {
   refresh(
     period: Period,
     options: { providerEntries?: ProviderEntry[]; nowMs?: number } = {},
-  ): UsageSummaryOutput {
-    const result = this.build(period, options.nowMs ?? Date.now(), options.providerEntries);
-    this.cache.set(period, { generatedAtMs: options.nowMs ?? Date.now(), result });
+  ): BuildResult {
+    const nowMs = options.nowMs ?? Date.now();
+    const result = this.build(period, nowMs, options.providerEntries);
+    this.cache.set(period, { generatedAtMs: nowMs, result });
     return result;
   }
 
   /** Cached read; re-aggregates when the entry is missing or older than the TTL. */
-  summarize(
+  private cached(
     period: Period,
     options: { providerEntries?: ProviderEntry[]; nowMs?: number } = {},
-  ): UsageSummaryOutput {
+  ): BuildResult {
     const nowMs = options.nowMs ?? Date.now();
     const hit = this.cache.get(period);
     if (hit && nowMs - hit.generatedAtMs < CACHE_TTL_MS) return hit.result;
     return this.refresh(period, { ...options, nowMs });
   }
 
-  private build(period: Period, nowMs: number, providerEntries?: ProviderEntry[]): UsageSummaryOutput {
+  summarize(
+    period: Period,
+    options: { providerEntries?: ProviderEntry[]; nowMs?: number } = {},
+  ): UsageSummaryOutput {
+    return this.cached(period, options).summary;
+  }
+
+  dashboard(
+    period: Period,
+    options: { providerEntries?: ProviderEntry[]; nowMs?: number } = {},
+  ): UsageDashboardOutput {
+    return this.cached(period, options).dashboard;
+  }
+
+  private build(period: Period, nowMs: number, providerEntries?: ProviderEntry[]): BuildResult {
     const adapterSources: SourceStatus[] = [];
     const rows: UsageRow[] = [];
 
@@ -99,13 +131,29 @@ export class UsageAggregator {
       group.entries.push(entry);
     }
 
-    return {
+    const summary: UsageSummaryOutput = {
       period,
       generatedAtMs: nowMs,
       totals,
       byProvider: [...byProviderMap.values()],
       sources,
     };
+
+    const daily = bucketDaily(filtered, PERIOD_WINDOW_DAYS[period], nowMs);
+    const dashboard: UsageDashboardOutput = {
+      period,
+      generatedAtMs: nowMs,
+      series: {
+        daily,
+        weekly: bucketWeekly(daily),
+        byProviderCost: bucketProviderCost(entries),
+        mostActiveDay: mostActiveDay(daily),
+      },
+      heatmapDaily: bucketDaily(rows, 365, nowMs),
+      sources,
+    };
+
+    return { summary, dashboard };
   }
 
   /**

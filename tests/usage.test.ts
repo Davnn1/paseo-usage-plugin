@@ -2,8 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   aggregateUsage,
+  bucketDaily,
+  bucketProviderCost,
+  bucketWeekly,
   cacheHitRatio,
+  dailyTokens,
   filterPeriod,
+  mostActiveDay,
   usageSummaryOutputSchema,
   usageSummaryRpc,
   type UsageRow,
@@ -220,4 +225,95 @@ test("mapSourceStatus: not_implemented when usage exists but no adapter", () => 
     unreadableBackends: new Set(["claude"]),
   });
   assert.equal(source.status, "not_implemented");
+});
+
+// ---------------------------------------------------------------------------
+// Dashboard series
+// ---------------------------------------------------------------------------
+
+const DAY = 24 * 60 * 60 * 1000;
+const NOW_DAY = Date.UTC(2026, 9, 8); // 2026-10-08T00:00:00Z, a Thursday
+
+test("bucketDaily gap-fills missing days with zeros", () => {
+  const rows = [
+    row({ timestampMs: NOW_DAY, inputTokens: 100 }),
+    row({ timestampMs: NOW_DAY - 2 * DAY, inputTokens: 50 }),
+  ];
+  const daily = bucketDaily(rows, 4, NOW_DAY + 12 * 3600 * 1000);
+  assert.equal(daily.length, 4);
+  assert.deepEqual(
+    daily.map((point) => point.date),
+    ["2026-10-05", "2026-10-06", "2026-10-07", "2026-10-08"],
+  );
+  assert.equal(daily[0].inputTokens, 0); // 10-05: no rows
+  assert.equal(daily[1].inputTokens, 50); // 10-06
+  assert.equal(daily[2].inputTokens, 0); // 10-07 gap
+  assert.equal(daily[3].inputTokens, 100); // 10-08
+  assert.equal(daily[3].sessions, 1);
+});
+
+test("bucketDaily sums same-day rows and handles empty input", () => {
+  const rows = [row({ timestampMs: NOW_DAY, inputTokens: 10 }), row({ timestampMs: NOW_DAY + 3600_000, costUsd: 0.125 })];
+  const daily = bucketDaily(rows, 1, NOW_DAY + 12 * 3600 * 1000);
+  assert.equal(daily.length, 1);
+  assert.equal(daily[0].inputTokens, 110); // default row carries 100 + explicit 10
+  assert.equal(daily[0].costUsd, 0.63); // 0.5 default + 0.125 rounded
+  assert.deepEqual(bucketDaily([], 3, NOW_DAY), [
+    { date: "2026-10-06", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, costUsd: 0, sessions: 0 },
+    { date: "2026-10-07", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, costUsd: 0, sessions: 0 },
+    { date: "2026-10-08", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, costUsd: 0, sessions: 0 },
+  ]);
+});
+
+test("bucketDaily with null window starts at earliest row", () => {
+  const rows = [row({ timestampMs: NOW_DAY - 9 * DAY, inputTokens: 1 }), row({ timestampMs: NOW_DAY, inputTokens: 2 })];
+  const daily = bucketDaily(rows, null, NOW_DAY + 12 * 3600 * 1000);
+  assert.equal(daily.length, 10);
+  assert.equal(daily[0].inputTokens, 1);
+  assert.equal(daily[9].inputTokens, 2);
+});
+
+test("bucketWeekly buckets tokens by UTC weekday", () => {
+  // 2026-10-08 is Thursday (4). One day before = Wednesday (3).
+  const daily = bucketDaily(
+    [row({ timestampMs: NOW_DAY, inputTokens: 100, outputTokens: 20, cacheReadTokens: 5 })],
+    2,
+    NOW_DAY + 12 * 3600 * 1000,
+  );
+  const weekly = bucketWeekly(daily);
+  assert.equal(weekly.length, 7);
+  assert.equal(weekly[4].tokens, 125); // Thu
+  assert.equal(weekly.reduce((sum, slot) => sum + slot.tokens, 0), 125);
+  assert.equal(dailyTokens(daily[1]), 125);
+});
+
+test("mostActiveDay picks the highest-token day", () => {
+  const daily = bucketDaily(
+    [
+      row({ timestampMs: NOW_DAY, inputTokens: 10, outputTokens: 0, cacheReadTokens: 0 }),
+      row({ timestampMs: NOW_DAY - DAY, inputTokens: 999, outputTokens: 0, cacheReadTokens: 0 }),
+    ],
+    2,
+    NOW_DAY + 12 * 3600 * 1000,
+  );
+  const mad = mostActiveDay(daily);
+  assert.deepEqual(mad, { weekday: 3, date: "2026-10-07", tokens: 999 });
+  const allZero = bucketDaily([], 2, NOW_DAY);
+  assert.equal(mostActiveDay(allZero), null);
+});
+
+test("bucketProviderCost groups by providerID and sorts desc", () => {
+  const rows = [
+    row({ backend: "opencode", provider: "kimi", model: "a", costUsd: 2 }),
+    row({ backend: "opencode", provider: "kimi", model: "b", costUsd: 1 }),
+    row({ backend: "opencode", provider: "deepseek", model: "c", costUsd: 5 }),
+    row({ backend: "codex", provider: "openai", model: "gpt", costUsd: 3.5 }),
+  ];
+  const { entries } = aggregateUsage(rows);
+  const costs = bucketProviderCost(entries);
+  assert.deepEqual(costs, [
+    { provider: "deepseek", costUsd: 5 },
+    { provider: "codex", costUsd: 3.5 },
+    { provider: "kimi", costUsd: 3 },
+  ]);
 });

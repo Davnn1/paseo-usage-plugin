@@ -100,6 +100,166 @@ export const usageRefreshRpc = defineRpc({
   output: usageSummaryOutputSchema,
 });
 
+// ---------------------------------------------------------------------------
+// Dashboard series
+// ---------------------------------------------------------------------------
+
+export const dailyPointSchema = z.object({
+  /** YYYY-MM-DD in UTC. */
+  date: z.string(),
+  inputTokens: z.number(),
+  outputTokens: z.number(),
+  cacheReadTokens: z.number(),
+  costUsd: z.number(),
+  sessions: z.number(),
+});
+export type DailyPoint = z.infer<typeof dailyPointSchema>;
+
+export const weeklyPointSchema = z.object({
+  /** 0 = Sunday … 6 = Saturday (Date.getUTCDay). */
+  weekday: z.number().int().min(0).max(6),
+  tokens: z.number(),
+  costUsd: z.number(),
+});
+export type WeeklyPoint = z.infer<typeof weeklyPointSchema>;
+
+export const providerCostSchema = z.object({
+  provider: z.string(),
+  costUsd: z.number(),
+});
+export type ProviderCost = z.infer<typeof providerCostSchema>;
+
+export const mostActiveDaySchema = z.object({
+  weekday: z.number().int().min(0).max(6),
+  date: z.string(),
+  tokens: z.number(),
+});
+export type MostActiveDay = z.infer<typeof mostActiveDaySchema>;
+
+export const usageSeriesSchema = z.object({
+  daily: z.array(dailyPointSchema),
+  weekly: z.array(weeklyPointSchema),
+  byProviderCost: z.array(providerCostSchema),
+  mostActiveDay: mostActiveDaySchema.nullable(),
+});
+export type UsageSeries = z.infer<typeof usageSeriesSchema>;
+
+export const usageDashboardOutputSchema = z.object({
+  period: periodSchema,
+  generatedAtMs: z.number(),
+  /** Charts follow the selected period. */
+  series: usageSeriesSchema,
+  /** Always the last 365 days, regardless of period. */
+  heatmapDaily: z.array(dailyPointSchema),
+  sources: z.array(sourceStatusSchema),
+});
+export type UsageDashboardOutput = z.infer<typeof usageDashboardOutputSchema>;
+
+export const usageDashboardRpc = defineRpc({
+  name: "usage.dashboard",
+  input: z.object({ period: periodSchema }),
+  output: usageDashboardOutputSchema,
+});
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** YYYY-MM-DD (UTC) for an epoch-ms timestamp. */
+export function dateKeyUtc(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+/** UTC day bucket key -> start-of-day epoch ms. */
+function dayStartUtc(ms: number): number {
+  const date = new Date(ms);
+  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+}
+
+/** Total token volume for a daily point: input + output + cache-read. */
+export function dailyTokens(point: Pick<DailyPoint, "inputTokens" | "outputTokens" | "cacheReadTokens">): number {
+  return point.inputTokens + point.outputTokens + point.cacheReadTokens;
+}
+
+/**
+ * Bucket rows into per-day points with gap-filling (missing days = 0).
+ * windowDays null covers everything from the earliest row through today;
+ * otherwise the window ends at nowMs. All dates UTC.
+ */
+export function bucketDaily(rows: UsageRow[], windowDays: number | null, nowMs: number): DailyPoint[] {
+  const byDay = new Map<string, DailyPoint>();
+  let earliest = Number.POSITIVE_INFINITY;
+  for (const row of rows) {
+    const key = dateKeyUtc(row.timestampMs);
+    if (row.timestampMs < earliest) earliest = row.timestampMs;
+    let point = byDay.get(key);
+    if (!point) {
+      point = { date: key, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, costUsd: 0, sessions: 0 };
+      byDay.set(key, point);
+    }
+    point.inputTokens += row.inputTokens;
+    point.outputTokens += row.outputTokens;
+    point.cacheReadTokens += row.cacheReadTokens;
+    point.costUsd += row.costUsd;
+    point.sessions += 1;
+  }
+
+  const today = dayStartUtc(nowMs);
+  const start = windowDays === null
+    ? (Number.isFinite(earliest) ? dayStartUtc(earliest) : today)
+    : today - (windowDays - 1) * DAY_MS;
+
+  const result: DailyPoint[] = [];
+  for (let t = start; t <= today; t += DAY_MS) {
+    const key = dateKeyUtc(t);
+    const point = byDay.get(key);
+    result.push(
+      point
+        ? { ...point, costUsd: Math.round(point.costUsd * 100) / 100 }
+        : { date: key, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, costUsd: 0, sessions: 0 },
+    );
+  }
+  return result;
+}
+
+/** Aggregate daily points into 7 weekday slots (0=Sun … 6=Sat). */
+export function bucketWeekly(daily: DailyPoint[]): WeeklyPoint[] {
+  const slots: WeeklyPoint[] = Array.from({ length: 7 }, (_, weekday) => ({ weekday, tokens: 0, costUsd: 0 }));
+  for (const point of daily) {
+    const weekday = new Date(`${point.date}T00:00:00Z`).getUTCDay();
+    slots[weekday].tokens += dailyTokens(point);
+    slots[weekday].costUsd += point.costUsd;
+  }
+  for (const slot of slots) slot.costUsd = Math.round(slot.costUsd * 100) / 100;
+  return slots;
+}
+
+/** Highest-token day, or null when the period has no usage. */
+export function mostActiveDay(daily: DailyPoint[]): MostActiveDay | null {
+  let best: DailyPoint | null = null;
+  for (const point of daily) {
+    if (dailyTokens(point) === 0) continue;
+    if (!best || dailyTokens(point) > dailyTokens(best)) best = point;
+  }
+  if (!best) return null;
+  return {
+    weekday: new Date(`${best.date}T00:00:00Z`).getUTCDay(),
+    date: best.date,
+    tokens: dailyTokens(best),
+  };
+}
+
+/** Cost grouped by provider. OpenCode rows already carry the providerID; other
+ * backends fall back to the backend name. Sorted by costUsd descending. */
+export function bucketProviderCost(entries: UsageEntry[]): ProviderCost[] {
+  const groups = new Map<string, number>();
+  for (const entry of entries) {
+    const key = entry.backend === "opencode" ? entry.provider : entry.backend;
+    groups.set(key, (groups.get(key) ?? 0) + entry.costUsd);
+  }
+  return [...groups.entries()]
+    .map(([provider, costUsd]) => ({ provider, costUsd: Math.round(costUsd * 100) / 100 }))
+    .sort((a, b) => b.costUsd - a.costUsd);
+}
+
 /** cacheHit = cacheRead / (cacheRead + fresh input); 0 when denominator is 0. */
 export function cacheHitRatio(cacheReadTokens: number, inputTokens: number): number {
   const denom = cacheReadTokens + inputTokens;

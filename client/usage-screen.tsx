@@ -3,7 +3,8 @@ import type { PluginScreenProps } from "@getpaseo/plugin/client";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
-import { usageRefreshRpc, usageSummaryRpc, type Period, type UsageEntry, type UsageSummaryOutput } from "../shared/usage";
+import { Dashboard } from "./dashboard";
+import { usageDashboardRpc, usageRefreshRpc, usageSummaryRpc, type Period, type UsageEntry, type UsageSummaryOutput } from "../shared/usage";
 
 const PERIODS: { id: Period; label: string }[] = [
   { id: "1d", label: "1d" },
@@ -27,15 +28,20 @@ function formatPercent(value: number): string {
   return `${(value * 100).toFixed(1)}%`;
 }
 
-export function UsageScreen({ theme, layout }: PluginScreenProps) {
+export function UsageScreen({ theme, layout, host }: PluginScreenProps) {
   const [period, setPeriod] = useState<Period>("30d");
   const fetchSummary = useRpc(usageSummaryRpc);
+  const fetchDashboard = useRpc(usageDashboardRpc);
   const fetchRefresh = useRpc(usageRefreshRpc);
   const queryClient = useQueryClient();
 
   const query = useQuery({
     queryKey: ["usage", "summary", period],
     queryFn: () => fetchSummary({ period }),
+  });
+  const dashboardQuery = useQuery({
+    queryKey: ["usage", "dashboard", period],
+    queryFn: () => fetchDashboard({ period }),
   });
   const refresh = useMutation({
     mutationFn: (target: Period) => fetchRefresh({ period: target }),
@@ -49,9 +55,11 @@ export function UsageScreen({ theme, layout }: PluginScreenProps) {
     () => ({
       screen: {
         flex: 1,
+        width: "100%",
         backgroundColor: theme.colors.surface0,
       } as const,
       content: {
+        width: "100%",
         padding: compact ? 12 : 20,
         gap: compact ? 10 : 14,
       } as const,
@@ -245,6 +253,10 @@ export function UsageScreen({ theme, layout }: PluginScreenProps) {
                 styles={styles}
               />
             </View>
+
+            {dashboardQuery.data ? (
+              <Dashboard data={dashboardQuery.data} theme={theme} layout={layout} host={host} />
+            ) : null}
 
             <Text style={styles.sectionTitle}>Usage by model</Text>
             {data.byProvider.length === 0 ? (
