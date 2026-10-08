@@ -6,6 +6,17 @@ Each session row is counted exactly once: OpenCode rows come from the `session` 
 
 All data sources are opened read-only and are never written to. Aggregated results are cached for five minutes per period; pull to refresh forces re-aggregation. No credentials are read or logged.
 
+## Entry points
+
+Every entry opens the Usage screen:
+
+| Entry | Where it appears |
+| --- | --- |
+| Sidebar header row | Desktop sidebar header |
+| Sidebar footer row | Desktop and clients whose sidebar shows the footer area (including mobile) |
+| Command Center "Open Usage" | ⌘K / Ctrl+K on every client |
+| Composer pill | Per-agent track bar next to Tasks and Subagents, where the host renders composer pills |
+
 ## Troubleshooting
 
 The screen, sidebar item, and composer pill only appear on clients connected to a daemon where this plugin is installed and running.

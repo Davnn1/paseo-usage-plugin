@@ -160,7 +160,28 @@ function contributeUsagePill(client: PluginClientContext) {
 export default function contribute(client: PluginClientContext) {
   const cleanups: (() => void)[] = [];
   cleanups.push(safeCleanup("screen", () => client.addScreen({ id: "usage", title: "Usage", Component: UsageScreen })));
-  cleanups.push(safeCleanup("sidebar", () => client.addSidebarHeaderItem({ id: "usage", title: "Usage", Component: SafeUsageItem })));
+  // Header items are not rendered by every host layout (mobile shows the
+  // footer area instead), so register both plus a Command Center entry.
+  cleanups.push(safeCleanup("sidebar-header", () => client.addSidebarHeaderItem({ id: "usage", title: "Usage", Component: SafeUsageItem })));
+  cleanups.push(safeCleanup("sidebar-footer", () => client.addSidebarFooterItem({ id: "usage-footer", title: "Usage", Component: SafeUsageItem })));
+  cleanups.push(
+    safeCleanup("command-center", () =>
+      client.addCommandCenterItem({
+        id: "open-usage",
+        title: "Open Usage",
+        icon: "Gauge",
+        keywords: ["usage", "tokens", "cost", "dashboard"],
+        context: "global",
+        onSelect({ openScreen }) {
+          try {
+            openScreen({ screenId: "usage" });
+          } catch (error) {
+            console.error("[usage] command center openScreen failed", error);
+          }
+        },
+      }),
+    ),
+  );
   cleanups.push(safeCleanup("pill", () => contributeUsagePill(client)));
   return () => {
     for (const cleanup of cleanups) {

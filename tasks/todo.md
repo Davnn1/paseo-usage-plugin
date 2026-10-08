@@ -112,6 +112,12 @@ Pill per-agent di composer track bar (sejajar pill MCP & Subagents) via `addComp
 1. **Pill fallback ke daily** (user setuju): urutan = sesi (session_summary found) → fallback **1d totals** (usage.summary period 1d) saat sesi belum ada / tidak terlacak / backend non-opencode. Title kasih mode eksplisit: "Session: <judul>" vs "Daily fallback — sesi tidak terlacak". Label format sama.
 2. **Mobile: pill + sidebar item tidak muncul** — kemungkinan besar HOST (mobile app connect ke daemon lain yang belum install plugin), tapi tetap harden: (a) pastikan registrasi sidebar + pill jalan tanpa throw di mobile (icon name valid lintas client, SidebarRow dari /client/ui), (b) wrap component render defensively (error di satu kontribusi jangan bunuh yang lain), (c) dokumentasikan checklist user di OVERVIEW.md: cek host picker di header screen, Settings > Sidebar visibility, `paseo plugin ls` di daemon yang di-connect harus memuat `usage running`.
 
+## 9. FIX round-4 (mobile, daemon SUDAH benar — plugin running di host yang sama)
+Temuan user: pill MUNCUL di mobile (fix icon Gauge terbukti) tapi (a) tap pill tidak membuka detail/screen, (b) sidebar item tetap tidak ada.
+1. **Pill press → screen cross-platform**: investigasi tipe `PluginButton` behavior (kind apa saja yang ada — mungkin ada `{kind:"screen", screenId}` yang di-handle host, atau `onPress` + `client.openScreen` butuh params). Pastikan tap di mobile membuka screen "usage". Kalau API hanya "action", pastikan `openScreen({screenId:"usage", params:{}})` benar terpanggil dan tidak silent-fail (guard try/catch + log).
+2. **Sidebar item mobile + fallback entry**: tambah `addSidebarFooterItem` DAN `addCommandCenterItem` ("Open Usage", openScreen) sebagai jalur alternatif buka screen di semua client. Investigasi kenapa header item tidak render di mobile (mobile layout mungkin tidak menampilkan sidebar header items — laporkan jujur kalau itu keputusan host).
+3. Semua entry point (sidebar header/footer, command center, pill) arahkan ke screen yang sama; dokumentasikan di OVERVIEW.md entry mana yang tersedia per platform.
+
 ## Handoff (pindah device)
 - Repo: https://github.com/Davnn1/paseo-usage-plugin.git (branch `main`).
 - Install di mesin baru: `git clone` → `npm install` → cek `pluginsEnabled` di `~/.paseo/config.json` daemon lokal → `paseo plugin install ./usage` **dari parent folder (path RELATIF — path absolut = silent no-op, pitfall terverifikasi)** → `paseo plugin ls` harus `running`, cek kolom ERROR.
