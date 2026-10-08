@@ -1,7 +1,8 @@
-import type { PluginButtonRegistration, PluginClientContext } from "@getpaseo/plugin/client";
+import type { PluginButtonContentProps, PluginButtonRegistration, PluginClientContext } from "@getpaseo/plugin/client";
 import type { PluginSidebarItemProps } from "@getpaseo/plugin/client";
 import { SidebarRow } from "@getpaseo/plugin/client/ui";
-import { Text, View } from "react-native";
+import { Pressable, Text, View } from "react-native";
+import type { ReactNode } from "react";
 import { UsageScreen } from "./client/usage-screen";
 import { buildPillText, usageSessionSummaryRpc, usageSummaryRpc, type SessionSummaryOutput, type UsageTotals } from "./shared/usage";
 
@@ -38,6 +39,115 @@ function safeCleanup(label: string, fn: () => () => void): () => void {
   }
 }
 
+function formatTokens(value: number): string {
+  if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(1)}B`;
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
+  return String(Math.round(value));
+}
+
+interface PillData {
+  session: SessionSummaryOutput | null;
+  daily: UsageTotals | null;
+}
+
+/** Detail card shown in the pill popover: full breakdown without navigation. */
+function PillPopoverContent({
+  agentId,
+  data,
+  openScreen,
+}: {
+  agentId: string;
+  data: () => PillData | undefined;
+  openScreen: () => void;
+}) {
+  return function Content({ theme, layout, close }: PluginButtonContentProps) {
+    const current = data();
+    const compact = layout.compact;
+    const row = (label: string, value: string) => (
+      <View style={{ flexDirection: "row", justifyContent: "space-between", gap: 24 }}>
+        <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>{label}</Text>
+        <Text style={{ color: theme.colors.foreground, fontSize: 12, fontWeight: "600" as const }}>{value}</Text>
+      </View>
+    );
+    const divider = <View style={{ height: 1, backgroundColor: theme.colors.border, marginVertical: 6 }} />;
+
+    let body: ReactNode;
+    if (current?.session?.found) {
+      const session = current.session;
+      body = (
+        <>
+          <Text style={{ color: theme.colors.foreground, fontSize: compact ? 14 : 15, fontWeight: "700" as const }} numberOfLines={2}>
+            {session.title || "Session"}
+          </Text>
+          <Text style={{ color: theme.colors.statusSuccess, fontSize: 11, fontWeight: "600" as const }}>Session mode</Text>
+          {divider}
+          {row("Provider", `${session.provider}/${session.model}`)}
+          {row("Input", formatTokens(session.inputTokens))}
+          {row("Output", formatTokens(session.outputTokens))}
+          {row("Reasoning", formatTokens(session.reasoningTokens))}
+          {row("Cache read", formatTokens(session.cacheReadTokens))}
+          {row("Cache write", formatTokens(session.cacheWriteTokens))}
+          {row("Cache hit", `${(session.cacheHitRatio * 100).toFixed(1)}%`)}
+          {row("Cost", `$${session.costUsd.toFixed(4)}`)}
+        </>
+      );
+    } else if (current?.daily) {
+      const daily = current.daily;
+      body = (
+        <>
+          <Text style={{ color: theme.colors.foreground, fontSize: compact ? 14 : 15, fontWeight: "700" as const }}>Today (all providers)</Text>
+          <Text style={{ color: theme.colors.statusWarning, fontSize: 11, fontWeight: "600" as const }}>
+            Daily fallback{current.session?.reason ? ` — ${current.session.reason}` : ""}
+          </Text>
+          {divider}
+          {row("Input", formatTokens(daily.inputTokens))}
+          {row("Output", formatTokens(daily.outputTokens))}
+          {row("Reasoning", formatTokens(daily.reasoningTokens))}
+          {row("Cache read", formatTokens(daily.cacheReadTokens))}
+          {row("Cache write", formatTokens(daily.cacheWriteTokens))}
+          {row("Cache hit", `${(daily.cacheHitRatio * 100).toFixed(1)}%`)}
+          {row("Cost", `$${daily.costUsd.toFixed(2)}`)}
+          {row("Sessions", String(daily.sessions))}
+        </>
+      );
+    } else {
+      body = (
+        <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>
+          Usage unavailable — session not tracked and daily totals failed to load.
+        </Text>
+      );
+    }
+
+    return (
+      <View style={{ padding: 14, gap: 5, minWidth: 220, maxWidth: 320 }}>
+        {body}
+        {divider}
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Open Usage screen"
+          onPress={() => {
+            try {
+              close();
+            } catch {
+              /* best effort */
+            }
+            try {
+              openScreen();
+            } catch (error) {
+              console.error("[usage] pill popover openScreen failed", error);
+            }
+          }}
+          style={{ paddingVertical: 7, borderRadius: 8, backgroundColor: theme.colors.accent, alignItems: "center" }}
+        >
+          <Text style={{ color: theme.colors.accentForeground, fontSize: 12, fontWeight: "700" as const }}>Open Usage screen</Text>
+        </Pressable>
+        <Text style={{ color: theme.colors.foregroundMuted, fontSize: 9 }}>{agentId.slice(0, 8)}</Text>
+      </View>
+    );
+  };
+}
+
 /**
  * Per-agent composer pill: usage of the linked provider session, falling back
  * to the global daily total when the session is untracked. Owned list
@@ -47,6 +157,7 @@ function safeCleanup(label: string, fn: () => () => void): () => void {
 function contributeUsagePill(client: PluginClientContext) {
   const pills = new Map<string, PluginButtonRegistration>();
   const timers = new Map<string, ReturnType<typeof setInterval>>();
+  const latest = new Map<string, PillData>();
   const lifetime = new AbortController();
   const REFRESH_MS = 60_000;
 
@@ -54,6 +165,7 @@ function contributeUsagePill(client: PluginClientContext) {
     const timer = timers.get(agentId);
     if (timer) clearInterval(timer);
     timers.delete(agentId);
+    latest.delete(agentId);
     pills.get(agentId)?.remove();
     pills.delete(agentId);
   };
@@ -76,6 +188,7 @@ function contributeUsagePill(client: PluginClientContext) {
       }
     }
     if (lifetime.signal.aborted || !pills.has(agentId)) return;
+    latest.set(agentId, { session, daily });
     try {
       registration.update({ ...buildPillText(session, daily), icon: "Gauge" });
     } catch (error) {
@@ -98,14 +211,18 @@ function contributeUsagePill(client: PluginClientContext) {
           icon: "Gauge",
           label: "…",
           behavior: {
-            kind: "action",
-            onPress() {
-              try {
-                client.openScreen({ screenId: "usage" });
-              } catch (error) {
-                console.error("[usage] openScreen failed", error);
-              }
-            },
+            kind: "popover",
+            Content: PillPopoverContent({
+              agentId,
+              data: () => latest.get(agentId),
+              openScreen: () => {
+                try {
+                  client.openScreen({ screenId: "usage" });
+                } catch (error) {
+                  console.error("[usage] openScreen failed", error);
+                }
+              },
+            }),
           },
         },
       });
