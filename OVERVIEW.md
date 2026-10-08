@@ -1,4 +1,4 @@
-# Usage
+# Monitoring
 
 Token and cost usage across every backend this machine has used, broken down per provider and model. It reads the local OpenCode session database (`~/.local/share/opencode/opencode.db`) and Codex rollout files (`~/.codex/sessions/*.jsonl`), aggregates input, output, reasoning, cache-read and cache-write tokens plus cost, and shows the result on a Usage screen in Paseo with 1d, 7d, 30d and all-time periods.
 
@@ -12,11 +12,10 @@ Every entry shows the same Usage view (period selector, overview cards, dashboar
 
 | Entry | Where it appears |
 | --- | --- |
-| Workspace panel "Usage" | Tab beside agents and terminals; the surface that renders on every host including mobile |
-| Composer pill detail card | Per-agent track bar: tap opens a compact metric card (input, output, reasoning, cache read/write, cache hit with a progress bar, cost; daily fallback when the session is untracked). Info only — open Usage via the panel, Command Center, or sidebar |
-| Command Center "Open Usage" | ⌘K / Ctrl+K, in the workspace scope; opens the Usage panel |
-| Sidebar header row | Desktop sidebar header |
-| Sidebar footer row | Clients whose sidebar shows the footer area |
+| Workspace panel "Monitoring" | Tab beside agents and terminals; the surface that renders on every host including mobile |
+| Composer pill detail card | Per-agent track bar: tap opens a compact metric card (input, output, reasoning, cache read/write, cache hit with a progress bar, cost; daily fallback when the session is untracked). Info only — open Monitoring via the panel, Command Center, or sidebar |
+| Command Center "Open Monitoring" | ⌘K / Ctrl+K, in the workspace scope; opens the Monitoring panel |
+| Sidebar header row | Desktop sidebar header (single entry; no footer duplicate) |
 
 ## Troubleshooting
 

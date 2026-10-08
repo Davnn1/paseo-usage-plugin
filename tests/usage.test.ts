@@ -483,7 +483,7 @@ test("buildPillText: null session with daily still falls back", () => {
 test("buildPillText: no session and no daily → honest placeholder", () => {
   const text = buildPillText(null, null);
   assert.equal(text.label, "—");
-  assert.equal(text.title, "Usage unavailable");
+  assert.equal(text.title, "Monitoring unavailable");
 });
 
 // ---------------------------------------------------------------------------

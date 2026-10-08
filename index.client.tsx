@@ -8,7 +8,7 @@ import { buildPillText, usageSessionSummaryRpc, usageSummaryRpc, type SessionSum
 function UsageItem({ currentScreen, openScreen }: PluginSidebarItemProps) {
   return (
     <SidebarRow
-      icon="Gauge"
+      icon="Activity"
       active={currentScreen?.screenId === "usage"}
       onPress={() => openScreen({ screenId: "usage" })}
     />
@@ -28,7 +28,7 @@ function SafeUsageItem(props: PluginSidebarItemProps) {
     console.error("[usage] sidebar item render failed", error);
     return (
       <View>
-        <Text style={{ color: props.theme.colors.foregroundMuted, fontSize: 12 }}>Usage</Text>
+        <Text style={{ color: props.theme.colors.foregroundMuted, fontSize: 12 }}>Monitoring</Text>
       </View>
     );
   }
@@ -101,7 +101,7 @@ function PillDetailCard({ data }: { data: () => PillData | undefined }) {
     } else {
       return (
         <View style={{ alignSelf: "stretch" as const, padding: compact ? 12 : 14 }}>
-          <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>Usage unavailable</Text>
+          <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>Monitoring unavailable</Text>
         </View>
       );
     }
@@ -197,7 +197,7 @@ function contributeUsagePill(client: PluginClientContext) {
     if (lifetime.signal.aborted || !pills.has(agentId)) return;
     latest.set(agentId, { session, daily });
     try {
-      registration.update({ label: buildPillText(session, daily).label, title: "Usage", icon: "Gauge" });
+      registration.update({ label: buildPillText(session, daily).label, title: "Monitoring", icon: "Activity" });
     } catch (error) {
       console.error("[usage] pill update failed", error);
     }
@@ -214,8 +214,8 @@ function contributeUsagePill(client: PluginClientContext) {
         workspaceId,
         agentId,
         button: {
-          title: "Usage",
-          icon: "Gauge",
+          title: "Monitoring",
+          icon: "Activity",
           label: "…",
           behavior: { kind: "popover", Content: PillDetailCard({ data: () => latest.get(agentId) }) },
         },
@@ -270,30 +270,27 @@ function contributeUsagePill(client: PluginClientContext) {
 
 export default function contribute(client: PluginClientContext) {
   const cleanups: (() => void)[] = [];
-  cleanups.push(safeCleanup("screen", () => client.addScreen({ id: "usage", title: "Usage", Component: UsageScreen })));
+  cleanups.push(safeCleanup("screen", () => client.addScreen({ id: "usage", title: "Monitoring", Component: UsageScreen })));
   // Workspace panels render as tabs beside agents/terminals, the surface that
   // is reliably present on mobile hosts (unlike sidebar header items).
   cleanups.push(
     safeCleanup("workspace-panel", () =>
       client.addWorkspacePanel({
         id: "usage-panel",
-        title: "Usage",
-        icon: "Gauge",
+        title: "Monitoring",
+        icon: "Activity",
         context: "workspace",
         Component: UsagePanel,
       }),
     ),
   );
-  // Header items are not rendered by every host layout (mobile shows the
-  // footer area instead), so register both plus a Command Center entry.
-  cleanups.push(safeCleanup("sidebar-header", () => client.addSidebarHeaderItem({ id: "usage", title: "Usage", Component: SafeUsageItem })));
-  cleanups.push(safeCleanup("sidebar-footer", () => client.addSidebarFooterItem({ id: "usage-footer", title: "Usage", Component: SafeUsageItem })));
+  cleanups.push(safeCleanup("sidebar-header", () => client.addSidebarHeaderItem({ id: "usage", title: "Monitoring", Component: SafeUsageItem })));
   cleanups.push(
     safeCleanup("command-center", () =>
       client.addCommandCenterItem({
         id: "open-usage",
-        title: "Open Usage",
-        icon: "Gauge",
+        title: "Open Monitoring",
+        icon: "Activity",
         keywords: ["usage", "tokens", "cost", "dashboard"],
         context: "workspace",
         onSelect({ openPanel }) {

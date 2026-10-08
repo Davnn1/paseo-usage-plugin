@@ -234,7 +234,7 @@ export function buildPillText(
         `cache hit ${(daily.cacheHitRatio * 100).toFixed(1)}%, cost $${daily.costUsd.toFixed(2)}, ${daily.sessions} sessions`,
     };
   }
-  return { label: "—", title: "Usage unavailable" };
+  return { label: "—", title: "Monitoring unavailable" };
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
