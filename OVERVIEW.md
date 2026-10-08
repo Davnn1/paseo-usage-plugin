@@ -14,7 +14,7 @@ Every entry shows the same Usage view (period selector, overview cards, dashboar
 | --- | --- |
 | Workspace panel "Usage" | Tab beside agents and terminals; the surface that renders on every host including mobile |
 | Composer pill menu | Per-agent track bar: tap shows a menu with mode, session title, provider/model, in/out/cache-r/hit/cost, and an "Open Usage" action that opens the workspace panel (falls back to the screen) |
-| Command Center "Open Usage" | ⌘K / Ctrl+K on every client |
+| Command Center "Open Usage" | ⌘K / Ctrl+K, in the workspace scope; opens the Usage panel |
 | Sidebar header row | Desktop sidebar header |
 | Sidebar footer row | Clients whose sidebar shows the footer area |
 

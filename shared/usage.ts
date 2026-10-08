@@ -200,12 +200,6 @@ function compactTokens(value: number): string {
   return String(Math.round(value));
 }
 
-function compactCost(value: number): string {
-  if (value >= 100) return `$${Math.round(value)}`;
-  if (value >= 10) return `$${value.toFixed(1)}`;
-  return `$${value.toFixed(2)}`;
-}
-
 export interface PillText {
   label: string;
   title: string;
@@ -213,7 +207,9 @@ export interface PillText {
 
 /**
  * Pill copy: linked session usage when available, otherwise the global daily
- * total. Title always names the mode so the fallback is never silent.
+ * total. Title always names the mode so the fallback is never silent. The
+ * label is deliberately minimal (in/out·hit%) because composer track bars are
+ * crowded; cost and the full breakdown live in the title/menu.
  */
 export function buildPillText(
   session: Pick<SessionSummaryOutput, "found" | "reason" | "title" | "inputTokens" | "outputTokens" | "reasoningTokens" | "cacheReadTokens" | "cacheWriteTokens" | "cacheHitRatio" | "costUsd" | "provider" | "model"> | null,
@@ -221,7 +217,7 @@ export function buildPillText(
 ): PillText {
   if (session?.found) {
     return {
-      label: `${compactTokens(session.inputTokens)}/${compactTokens(session.outputTokens)}·${(session.cacheHitRatio * 100).toFixed(0)}%·${compactCost(session.costUsd)}`,
+      label: `${compactTokens(session.inputTokens)}/${compactTokens(session.outputTokens)}·${(session.cacheHitRatio * 100).toFixed(0)}%`,
       title:
         `Session: ${session.title || "untitled"} — ${compactTokens(session.inputTokens)} in / ${compactTokens(session.outputTokens)} out ` +
         `(reasoning ${compactTokens(session.reasoningTokens)}), cache read ${compactTokens(session.cacheReadTokens)}, ` +
@@ -231,7 +227,7 @@ export function buildPillText(
   }
   if (daily) {
     return {
-      label: `${compactTokens(daily.inputTokens)}/${compactTokens(daily.outputTokens)}·${(daily.cacheHitRatio * 100).toFixed(0)}%·${compactCost(daily.costUsd)}`,
+      label: `${compactTokens(daily.inputTokens)}/${compactTokens(daily.outputTokens)}·${(daily.cacheHitRatio * 100).toFixed(0)}%`,
       title:
         `Daily fallback — session not tracked${session?.reason ? `: ${session.reason}` : ""}. ` +
         `${compactTokens(daily.inputTokens)} in / ${compactTokens(daily.outputTokens)} out, ` +

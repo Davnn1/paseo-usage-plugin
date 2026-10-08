@@ -57,61 +57,61 @@ interface PillData {
 
 /**
  * Menu behavior is the surface that renders on every host (mobile included):
- * tap always shows something. Info rows are disabled items; the last item is
- * the only action. `update({behavior})` replaces the whole behavior on refresh.
+ * tap always shows something. Compact on purpose: one title line, one numbers
+ * line, then the action. Full breakdown lives in the screen/panel and the
+ * hover title. `update({behavior})` replaces the whole behavior on refresh.
  */
+function truncate(value: string, max: number): string {
+  return value.length > max ? `${value.slice(0, max - 1)}…` : value;
+}
+
 function buildPillMenu(data: PillData | undefined, openUsage: () => void): PluginButtonMenuEntry[] {
   const noop = { kind: "action" as const, onPress() {} };
   const items: PluginButtonMenuEntry[] = [];
   if (data?.session?.found) {
-    const session = data.session;
-    items.push({ kind: "item", id: "mode", title: "Session mode", disabled: true, behavior: noop });
-    items.push({ kind: "item", id: "title", title: session.title || "Session", disabled: true, behavior: noop });
     items.push({
       kind: "item",
-      id: "provider",
-      title: `${session.provider}/${session.model}`,
-      disabled: true,
-      behavior: noop,
-    });
-    items.push({
-      kind: "item",
-      id: "totals",
-      title:
-        `in ${formatTokens(session.inputTokens)} · out ${formatTokens(session.outputTokens)} · ` +
-        `cache-r ${formatTokens(session.cacheReadTokens)} · hit ${(session.cacheHitRatio * 100).toFixed(1)}% · ` +
-        `$${session.costUsd.toFixed(4)}`,
+      id: "title",
+      title: truncate(data.session.title || "Session", 44),
       disabled: true,
       behavior: noop,
     });
   } else if (data?.daily) {
-    const daily = data.daily;
     items.push({
       kind: "item",
-      id: "mode",
-      title: `Daily fallback${data.session?.reason ? ` — ${data.session.reason}` : ""}`,
-      disabled: true,
-      behavior: noop,
-    });
-    items.push({
-      kind: "item",
-      id: "totals",
-      title:
-        `in ${formatTokens(daily.inputTokens)} · out ${formatTokens(daily.outputTokens)} · ` +
-        `cache-r ${formatTokens(daily.cacheReadTokens)} · hit ${(daily.cacheHitRatio * 100).toFixed(1)}% · ` +
-        `$${daily.costUsd.toFixed(2)} · ${daily.sessions} sessions`,
+      id: "title",
+      title: truncate(`Daily fallback${data.session?.reason ? ` — ${data.session.reason}` : ""}`, 44),
       disabled: true,
       behavior: noop,
     });
   } else {
     items.push({
       kind: "item",
-      id: "empty",
+      id: "title",
       title: "Usage unavailable — session not tracked",
       disabled: true,
       behavior: noop,
     });
   }
+  const metrics = data?.session?.found
+    ? {
+        in: data.session.inputTokens,
+        out: data.session.outputTokens,
+        hit: data.session.cacheHitRatio,
+        cost: data.session.costUsd,
+      }
+    : data?.daily
+      ? { in: data.daily.inputTokens, out: data.daily.outputTokens, hit: data.daily.cacheHitRatio, cost: data.daily.costUsd }
+      : null;
+  items.push({
+    kind: "item",
+    id: "totals",
+    title: metrics
+      ? `${formatTokens(metrics.in)}/${formatTokens(metrics.out)} · ${(metrics.hit * 100).toFixed(0)}% · $${metrics.cost.toFixed(2)}`
+      : "—",
+    disabled: true,
+    behavior: noop,
+  });
   items.push({ kind: "separator", id: "sep" });
   items.push({
     kind: "item",
@@ -286,12 +286,17 @@ export default function contribute(client: PluginClientContext) {
         title: "Open Usage",
         icon: "Gauge",
         keywords: ["usage", "tokens", "cost", "dashboard"],
-        context: "global",
-        onSelect({ openScreen }) {
+        context: "workspace",
+        onSelect({ openPanel }) {
           try {
-            openScreen({ screenId: "usage" });
+            openPanel("usage-panel");
           } catch (error) {
-            console.error("[usage] command center openScreen failed", error);
+            console.error("[usage] command center openPanel failed, falling back to screen", error);
+            try {
+              client.openScreen({ screenId: "usage" });
+            } catch (inner) {
+              console.error("[usage] command center openScreen failed", inner);
+            }
           }
         },
       }),

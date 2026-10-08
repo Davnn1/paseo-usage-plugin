@@ -453,14 +453,14 @@ const dailyTotals = {
 
 test("buildPillText: session found → session numbers, Session: title", () => {
   const text = buildPillText(sessionFound, dailyTotals);
-  assert.equal(text.label, "1.5M/60.0K·90%·$1.23");
+  assert.equal(text.label, "1.5M/60.0K·90%");
   assert.match(text.title, /^Session: Fix the thing/);
   assert.match(text.title, /kimi\/kimi-for-coding/);
 });
 
 test("buildPillText: session not found → daily fallback with reason in title", () => {
   const text = buildPillText({ ...sessionFound, found: false, reason: "no linked opencode session" }, dailyTotals);
-  assert.equal(text.label, "3.0M/300.0K·75%·$12.3");
+  assert.equal(text.label, "3.0M/300.0K·75%");
   assert.match(text.title, /^Daily fallback — session not tracked: no linked opencode session/);
   assert.match(text.title, /7 sessions/);
 });
