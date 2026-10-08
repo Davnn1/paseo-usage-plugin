@@ -100,7 +100,7 @@ function PillDetailCard({ data }: { data: () => PillData | undefined }) {
       ];
     } else {
       return (
-        <View style={{ padding: 14, minWidth: 220, maxWidth: 300 }}>
+        <View style={{ alignSelf: "stretch" as const, padding: compact ? 12 : 14 }}>
           <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>Usage unavailable</Text>
         </View>
       );
@@ -109,12 +109,12 @@ function PillDetailCard({ data }: { data: () => PillData | undefined }) {
     return (
       <View
         style={{
+          alignSelf: "stretch" as const,
+          width: "100%" as const,
           backgroundColor: theme.colors.surface1,
           borderRadius: 12,
           padding: compact ? 12 : 14,
           gap: compact ? 7 : 9,
-          minWidth: 240,
-          maxWidth: 300,
         }}
       >
         {rows.map((rowMetric) => (
