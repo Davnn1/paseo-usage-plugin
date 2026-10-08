@@ -13,6 +13,8 @@ export interface AgyCall {
   thinkingTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
+  /** Optional proxy tag (path /cli/<tag>); extra fields are ignore-safe. */
+  agentId?: string;
 }
 
 export interface AgyProxyResult {
@@ -21,6 +23,12 @@ export interface AgyProxyResult {
   /** One UsageRow per proxied LLM call; each row counts exactly one call. */
   rows: UsageRow[];
   callsBySource: Record<"cli" | "acp" | "agy", number>;
+  /**
+   * Most recent promptTokens per (backend, provider, model) — the Gemini
+   * promptTokenCount is already cache-inclusive, so it measures live context
+   * occupancy against the model's context window.
+   */
+  latestPromptByKey: Map<string, { promptTokens: number; tsMs: number }>;
 }
 
 const SOURCE_BACKENDS: Record<AgyCall["source"], { backend: string; provider: string }> = {
@@ -56,6 +64,7 @@ export function parseAgyLine(line: string): AgyCall | null {
     ts,
     source,
     model: typeof obj.model === "string" && obj.model ? obj.model : "unknown",
+    agentId: typeof obj.agentId === "string" && obj.agentId ? obj.agentId : undefined,
     status: num(obj.status),
     promptTokens: num(obj.promptTokens),
     outputTokens: num(obj.outputTokens),
@@ -94,6 +103,7 @@ export function readAgyProxyRows(
     status: "no_data_source",
     rows: [],
     callsBySource: { cli: 0, acp: 0, agy: 0 },
+    latestPromptByKey: new Map(),
   };
   if (!existsSync(path)) return empty;
   let content: string;
@@ -106,12 +116,21 @@ export function readAgyProxyRows(
 
   const calls: AgyCall[] = [];
   const callsBySource: AgyProxyResult["callsBySource"] = { cli: 0, acp: 0, agy: 0 };
+  const latestPromptByKey = new Map<string, { promptTokens: number; tsMs: number }>();
   for (const line of content.split("\n")) {
     const call = parseAgyLine(line);
     if (!call) continue;
     calls.push(call);
     callsBySource[call.source] += 1;
+    const tsMs = Date.parse(call.ts);
+    if (!Number.isFinite(tsMs)) continue;
+    const target = SOURCE_BACKENDS[call.source];
+    const key = `${target.backend}${target.provider}${call.model}`;
+    const current = latestPromptByKey.get(key);
+    if (!current || tsMs > current.tsMs) {
+      latestPromptByKey.set(key, { promptTokens: call.promptTokens, tsMs });
+    }
   }
   if (calls.length === 0) return { ...empty, callsBySource };
-  return { status: "ok", rows: callsToRows(calls), callsBySource };
+  return { status: "ok", rows: callsToRows(calls), callsBySource, latestPromptByKey };
 }

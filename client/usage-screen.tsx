@@ -574,7 +574,7 @@ function badgeColor(status: string, theme: PluginScreenProps["theme"]): string {
 }
 
 interface ColumnDef {
-  key: keyof UsageEntry | "provider";
+  key: keyof UsageEntry | "provider" | "ctx";
   label: string;
   weight: number;
   minWidth: number;
@@ -589,6 +589,7 @@ const COLUMNS: ColumnDef[] = [
   { key: "cacheReadTokens", label: "Cache-R", weight: 1.1, minWidth: 66 },
   { key: "cacheWriteTokens", label: "Cache-W", weight: 1.1, minWidth: 66 },
   { key: "cacheHitRatio", label: "Hit %", weight: 0.8, minWidth: 52 },
+  { key: "ctx", label: "Ctx %", weight: 1.15, minWidth: 78 },
   { key: "costUsd", label: "Cost", weight: 1, minWidth: 60 },
   { key: "sessions", label: "Sesi", weight: 0.7, minWidth: 44 },
 ];
@@ -633,21 +634,54 @@ function EntryRow({
         return formatCost(entry.costUsd);
       case "sessions":
         return String(entry.sessions);
+      case "ctx":
+        return entry.ctx ? `${Math.round((entry.ctx.usedTokens / entry.ctx.windowTokens) * 100)}%` : "—";
       default:
         return String(entry[key]);
     }
   };
   return (
     <View style={[styles.row, alt ? styles.rowAlt : null]}>
-      {COLUMNS.map((column, index) => (
-        <Text
-          key={column.key}
-          style={[styles.cell, { width: widths[index] }]}
-          numberOfLines={column.key === "provider" ? undefined : 1}
-        >
-          {valueFor(column.key)}
-        </Text>
-      ))}
+      {COLUMNS.map((column, index) =>
+        column.key === "ctx" ? (
+          <View key={column.key} style={{ width: widths[index], gap: 2 }}>
+            <Text style={styles.cell} numberOfLines={1}>
+              {valueFor("ctx")}
+            </Text>
+            {entry.ctx ? (
+              <>
+                <Text style={styles.cellMuted} numberOfLines={1}>
+                  {`${formatTokens(entry.ctx.usedTokens)}/${formatWindow(entry.ctx.windowTokens)}`}
+                </Text>
+                <View style={{ height: 3, borderRadius: 2, backgroundColor: styles.rowAlt.backgroundColor, overflow: "hidden" }}>
+                  <View
+                    style={{
+                      height: 3,
+                      width: `${Math.min(100, (entry.ctx.usedTokens / entry.ctx.windowTokens) * 100)}%`,
+                      borderRadius: 2,
+                      backgroundColor: styles.cell.color,
+                    }}
+                  />
+                </View>
+              </>
+            ) : null}
+          </View>
+        ) : (
+          <Text
+            key={column.key}
+            style={[styles.cell, { width: widths[index] }]}
+            numberOfLines={column.key === "provider" ? undefined : 1}
+          >
+            {valueFor(column.key)}
+          </Text>
+        ),
+      )}
     </View>
   );
+}
+
+function formatWindow(tokens: number): string {
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(0)}M`;
+  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(0)}K`;
+  return String(tokens);
 }

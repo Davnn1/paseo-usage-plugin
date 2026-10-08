@@ -653,3 +653,72 @@ test("aggregator honors startDate/endDate with inclusive boundaries (live db)", 
   const withFuture = aggregator.summarize("all", { startDate: "2999-01-01", endDate: "2999-01-02" });
   assert.equal(withFuture.totals.sessions, 0);
 });
+
+// ---------------------------------------------------------------------------
+// Context window occupancy
+// ---------------------------------------------------------------------------
+
+import { resolveContextWindow } from "../server/context-windows";
+
+test("resolveContextWindow: env override wins, then fallbacks, unknown is null", () => {
+  assert.equal(resolveContextWindow("gemini-3-flash"), 1_048_576);
+  assert.equal(resolveContextWindow("claude-sonnet-4-6"), 200_000);
+  assert.equal(resolveContextWindow("claude-opus-4-1"), 200_000);
+  assert.equal(resolveContextWindow("gpt-oss-120b-mid"), 131_072);
+  assert.equal(resolveContextWindow("some-unknown-model"), null);
+
+  const override = { "gemini-3-flash": 500_000, "custom-": 123_456 };
+  assert.equal(resolveContextWindow("gemini-3-flash", override), 500_000); // exact env wins
+  assert.equal(resolveContextWindow("custom-model-x", override), 123_456); // longest prefix
+  assert.equal(resolveContextWindow("gpt-oss-120b-mid", override), 131_072); // fallback when no prefix matches
+});
+
+test("aggregator fills ctx for harness entries from proxied latest prompt", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "usage-ctx-"));
+  const metrics = join(dir, "metrics.jsonl");
+  writeFileSync(
+    metrics,
+    [
+      JSON.stringify({ ts: "2026-10-08T09:00:00.000Z", source: "cli", model: "gemini-3-flash", status: 200, promptTokens: 100, outputTokens: 10 }),
+      JSON.stringify({ ts: "2026-10-08T10:00:00.000Z", source: "cli", model: "gemini-3-flash", status: 200, promptTokens: 524_288, outputTokens: 20 }),
+      JSON.stringify({ ts: "2026-10-08T11:00:00.000Z", source: "acp", model: "mystery-model", status: 200, promptTokens: 999 }),
+    ].join("\n"),
+  );
+  const previous = process.env.AGY_PROXY_METRICS;
+  process.env.AGY_PROXY_METRICS = metrics;
+  try {
+    const { UsageAggregator } = await import("../server/aggregator");
+    const aggregator = new UsageAggregator();
+    const summary = aggregator.summarize("all", {});
+    const gemini = summary.byProvider
+      .flatMap((group) => group.entries)
+      .find((entry) => entry.backend === "antigravity-cli" && entry.model === "gemini-3-flash");
+    // newest prompt wins: 42% of 1,048,576
+    assert.deepEqual(gemini?.ctx, { usedTokens: 524_288, windowTokens: 1_048_576 });
+    const mystery = summary.byProvider
+      .flatMap((group) => group.entries)
+      .find((entry) => entry.model === "mystery-model");
+    assert.equal(mystery?.ctx, undefined); // unknown window stays honest
+    // opencode rows untouched
+    const kimi = summary.byProvider
+      .flatMap((group) => group.entries)
+      .find((entry) => entry.backend === "opencode" && entry.provider === "kimi");
+    assert.equal(kimi?.ctx, undefined);
+  } finally {
+    if (previous === undefined) delete process.env.AGY_PROXY_METRICS;
+    else process.env.AGY_PROXY_METRICS = previous;
+  }
+});
+
+test("session resolve stays honest for antigravity agents (no opencode session)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "usage-agents-agy-"));
+  const ws = join(dir, "ws1");
+  mkdirSync(ws);
+  writeFileSync(
+    join(ws, "agent-agy.json"),
+    JSON.stringify({ provider: "antigravity", runtimeInfo: { sessionId: "9ba0609a-37ba-47e0-9eb4-3a2776e787d4" } }),
+  );
+  const result = resolveSessionSummary("agent-agy", { agentsDir: dir });
+  assert.equal(result.found, false);
+  assert.match(result.reason ?? "", /non-opencode/);
+});

@@ -39,6 +39,8 @@ export const usageEntrySchema = z.object({
   firstUsed: z.number(),
   lastUsed: z.number(),
   cacheHitRatio: z.number(),
+  /** Live context occupancy for harness-proxied models (latest prompt vs window). */
+  ctx: z.object({ usedTokens: z.number(), windowTokens: z.number() }).optional(),
 });
 export type UsageEntry = z.infer<typeof usageEntrySchema>;
 
