@@ -478,7 +478,7 @@ function EntryRow({
         <Text
           key={column.key}
           style={[styles.cell, { width: widths[index] }]}
-          numberOfLines={1}
+          numberOfLines={column.key === "provider" ? undefined : 1}
         >
           {valueFor(column.key)}
         </Text>

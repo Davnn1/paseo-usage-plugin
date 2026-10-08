@@ -57,62 +57,45 @@ interface PillData {
 
 /**
  * Menu behavior is the surface that renders on every host (mobile included).
- * Minimal on purpose: the sheet shows the session title (host header) plus one
- * or two disabled info lines — no provider/model, no redirect action. The full
- * breakdown lives in the Usage panel/screen. `update({behavior})` replaces the
- * whole behavior on refresh.
+ * The sheet shows metric rows only, capitalized — the session title already
+ * appears in the sheet header from the button title. No redirect action; the
+ * full breakdown lives in the Usage panel/screen. `update({behavior})`
+ * replaces the whole behavior on refresh.
  */
-function truncate(value: string, max: number): string {
-  return value.length > max ? `${value.slice(0, max - 1)}…` : value;
-}
-
 function buildPillMenu(data: PillData | undefined): PluginButtonMenuEntry[] {
   const noop = { kind: "action" as const, onPress() {} };
-  const items: PluginButtonMenuEntry[] = [];
+  const row = (id: string, title: string): PluginButtonMenuEntry => ({
+    kind: "item",
+    id,
+    title,
+    disabled: true,
+    behavior: noop,
+  });
   if (data?.session?.found) {
-    items.push({
-      kind: "item",
-      id: "title",
-      title: truncate(data.session.title || "Session", 44),
-      disabled: true,
-      behavior: noop,
-    });
-    items.push({
-      kind: "item",
-      id: "totals",
-      title:
-        `in ${formatTokens(data.session.inputTokens)} · out ${formatTokens(data.session.outputTokens)} · ` +
-        `hit ${(data.session.cacheHitRatio * 100).toFixed(0)}% · $${data.session.costUsd.toFixed(2)}`,
-      disabled: true,
-      behavior: noop,
-    });
-  } else if (data?.daily) {
-    items.push({
-      kind: "item",
-      id: "title",
-      title: truncate(`Daily fallback${data.session?.reason ? ` — ${data.session.reason}` : ""}`, 44),
-      disabled: true,
-      behavior: noop,
-    });
-    items.push({
-      kind: "item",
-      id: "totals",
-      title:
-        `in ${formatTokens(data.daily.inputTokens)} · out ${formatTokens(data.daily.outputTokens)} · ` +
-        `hit ${(data.daily.cacheHitRatio * 100).toFixed(0)}% · $${data.daily.costUsd.toFixed(2)}`,
-      disabled: true,
-      behavior: noop,
-    });
-  } else {
-    items.push({
-      kind: "item",
-      id: "empty",
-      title: "usage unavailable",
-      disabled: true,
-      behavior: noop,
-    });
+    const session = data.session;
+    return [
+      row("input", `Input · ${formatTokens(session.inputTokens)}`),
+      row("output", `Output · ${formatTokens(session.outputTokens)}`),
+      row("reasoning", `Reasoning · ${formatTokens(session.reasoningTokens)}`),
+      row("cache-read", `Cache Read · ${formatTokens(session.cacheReadTokens)}`),
+      row("cache-write", `Cache Write · ${formatTokens(session.cacheWriteTokens)}`),
+      row("cache-hit", `Cache Hit · ${(session.cacheHitRatio * 100).toFixed(1)}%`),
+      row("cost", `Cost · $${session.costUsd.toFixed(2)}`),
+    ];
   }
-  return items;
+  if (data?.daily) {
+    const daily = data.daily;
+    return [
+      row("input", `Input · ${formatTokens(daily.inputTokens)}`),
+      row("output", `Output · ${formatTokens(daily.outputTokens)}`),
+      row("reasoning", `Reasoning · ${formatTokens(daily.reasoningTokens)}`),
+      row("cache-read", `Cache Read · ${formatTokens(daily.cacheReadTokens)}`),
+      row("cache-write", `Cache Write · ${formatTokens(daily.cacheWriteTokens)}`),
+      row("cache-hit", `Cache Hit · ${(daily.cacheHitRatio * 100).toFixed(1)}%`),
+      row("cost", `Cost · $${daily.costUsd.toFixed(2)}`),
+    ];
+  }
+  return [row("empty", "Usage unavailable")];
 }
 
 /**
@@ -159,7 +142,8 @@ function contributeUsagePill(client: PluginClientContext) {
     latest.set(agentId, data);
     try {
       registration.update({
-        ...buildPillText(session, daily),
+        label: buildPillText(session, daily).label,
+        title: "Usage",
         icon: "Gauge",
         behavior: { kind: "menu", items: buildPillMenu(data) },
       });
@@ -179,7 +163,7 @@ function contributeUsagePill(client: PluginClientContext) {
         workspaceId,
         agentId,
         button: {
-          title: "Session usage",
+          title: "Usage",
           icon: "Gauge",
           label: "…",
           behavior: { kind: "menu", items: buildPillMenu(latest.get(agentId)) },

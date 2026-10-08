@@ -282,6 +282,7 @@ function MostActiveAndWeekly({
   theme: PluginHostProps["theme"];
   compact: boolean;
 }) {
+  const [focus, setFocus] = useState<number | null>(null);
   const maxWeekly = Math.max(1, ...series.weekly.map((point) => point.tokens));
   const mad = series.mostActiveDay;
   const barHeight = compact ? 42 : 56;
@@ -306,17 +307,31 @@ function MostActiveAndWeekly({
         {WEEKDAY_MON_FIRST.map((weekday) => {
           const point: WeeklyPoint | undefined = series.weekly[weekday];
           const ratio = point ? point.tokens / maxWeekly : 0;
+          const bar = (
+            <View
+              style={{
+                width: "100%",
+                height: Math.max(2, Math.round(ratio * barHeight)),
+                borderRadius: 3,
+                backgroundColor: theme.colors.accent,
+                opacity: point && point.tokens > 0 ? 1 : 0.15,
+              }}
+            />
+          );
           return (
             <View key={weekday} style={{ flex: 1, alignItems: "center", gap: 3 }}>
-              <View
-                style={{
-                  width: "100%",
-                  height: Math.max(2, Math.round(ratio * barHeight)),
-                  borderRadius: 3,
-                  backgroundColor: theme.colors.accent,
-                  opacity: point && point.tokens > 0 ? 1 : 0.15,
-                }}
-              />
+              {point && point.tokens > 0 ? (
+                <Pressable
+                  onHoverIn={() => setFocus(weekday)}
+                  onHoverOut={() => setFocus((current) => (current === weekday ? null : current))}
+                  onPress={() => setFocus((current) => (current === weekday ? null : weekday))}
+                  style={{ width: "100%", alignItems: "center" }}
+                >
+                  {bar}
+                </Pressable>
+              ) : (
+                bar
+              )}
               <Text style={{ color: theme.colors.foregroundMuted, fontSize: 9 }}>
                 {WEEKDAY_SHORT[weekday].slice(0, 2)}
               </Text>
@@ -324,6 +339,11 @@ function MostActiveAndWeekly({
           );
         })}
       </View>
+      <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11 }} numberOfLines={1}>
+        {focus !== null && series.weekly[focus]
+          ? `${WEEKDAY_SHORT[focus]} · ${formatTokens(series.weekly[focus].tokens)} tokens · $${series.weekly[focus].costUsd.toFixed(2)}`
+          : "Hover or press a bar for details."}
+      </Text>
     </View>
   );
 }
