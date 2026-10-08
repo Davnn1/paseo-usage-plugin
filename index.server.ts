@@ -18,6 +18,22 @@ async function providerSnapshot(paseo: PaseoApi): Promise<ProviderEntry[] | unde
 }
 
 export default function contribute(server: PluginServerContext) {
+  // Route Antigravity harness LLM traffic through agy-usage-proxy so token
+  // usage is recorded. Only new spawns; an explicit AGY_LLM_GATEWAY_URL in the
+  // agent env or provider options always wins.
+  server.before("agent.create", ({ request }) => {
+    const provider = request.config.provider;
+    if (provider !== "antigravity" && provider !== "antigravity-acp") return;
+    const base = process.env.AGY_PROXY_URL ?? "http://127.0.0.1:9880";
+    const gateway = provider === "antigravity" ? `${base}/cli` : `${base}/acp`;
+    const configured =
+      request.env?.["AGY_LLM_GATEWAY_URL"] ??
+      (request.config.providerOptions?.env as Record<string, unknown> | undefined)?.["AGY_LLM_GATEWAY_URL"];
+    if (typeof configured === "string" && configured) return;
+    request.env = { ...(request.env ?? {}), AGY_LLM_GATEWAY_URL: gateway };
+    return request;
+  });
+
   server.handle(usageSummaryRpc, async ({ period }: RpcInput<typeof usageSummaryRpc>, { paseo }) =>
     aggregator.summarize(period, { providerEntries: await providerSnapshot(paseo) }),
   );

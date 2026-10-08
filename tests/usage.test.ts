@@ -215,7 +215,7 @@ test("mapSourceStatus: antigravity used from store stats, never_used when empty"
   assert.equal(used.status, "used");
   assert.equal(used.sessions, 3);
   assert.equal(used.label, "Antigravity (CLI)");
-  assert.match(used.detail ?? "", /token usage not recorded locally/);
+  assert.match(used.detail ?? "", /3 sessions · 42 steps/);
 
   const empty = mapSourceStatus({
     provider: { provider: "antigravity-acp" },
@@ -520,4 +520,80 @@ test("countSteps and collectStats read a fixture conversations directory", () =>
   assert.equal(stats?.sessions, 2);
   assert.equal(stats?.steps, 3);
   assert.equal(collectStats(join(dir, "missing")), null);
+});
+
+// ---------------------------------------------------------------------------
+// agy-usage-proxy metrics adapter
+// ---------------------------------------------------------------------------
+
+import { callsToRows, parseAgyLine, readAgyProxyRows } from "../server/adapters/agy-proxy";
+
+const AGY_LINES = [
+  '{"ts":"2026-10-08T10:00:00.000Z","source":"cli","model":"gemini-3-flash","status":200,"stream":true,"promptTokens":100,"outputTokens":20,"thinkingTokens":5,"cacheReadTokens":80,"cacheWriteTokens":10,"totalTokens":215,"durationMs":1234}',
+  '{"ts":"2026-10-08T10:01:00.000Z","source":"cli","model":"gemini-3-flash","status":200,"promptTokens":50,"outputTokens":null,"thinkingTokens":null,"cacheReadTokens":null,"cacheWriteTokens":null,"totalTokens":null,"durationMs":600}',
+  '{"ts":"2026-10-08T10:02:00.000Z","source":"acp","model":"claude-sonnet-4","status":200,"stream":true,"promptTokens":700,"outputTokens":300,"thinkingTokens":0,"cacheReadTokens":650,"cacheWriteTokens":0,"totalTokens":1650,"durationMs":9000}',
+  '{"ts":"2026-10-08T10:03:00.000Z","source":"agy","model":"gemini-3-flash","status":200,"stream":true,"promptTokens":10,"outputTokens":1,"thinkingTokens":0,"cacheReadTokens":0,"cacheWriteTokens":0,"totalTokens":11,"durationMs":100}',
+  "not json at all",
+  '{"ts":"2026-10-08T10:04:00.000Z","source":"other","model":"x","status":200}',
+].join("\n");
+
+test("parseAgyLine accepts locked contract and rejects foreign lines", () => {
+  const ok = parseAgyLine(AGY_LINES.split("\n")[0]);
+  assert.equal(ok?.source, "cli");
+  assert.equal(ok?.model, "gemini-3-flash");
+  assert.equal(ok?.promptTokens, 100);
+  assert.equal(parseAgyLine(""), null);
+  assert.equal(parseAgyLine("broken"), null);
+  assert.equal(parseAgyLine(AGY_LINES.split("\n")[5]), null);
+  const nulls = parseAgyLine(AGY_LINES.split("\n")[1]);
+  assert.equal(nulls?.outputTokens, 0); // null fields coerce to 0
+});
+
+test("callsToRows maps sources to backends without touching other rows", () => {
+  const calls = AGY_LINES.split("\n").map(parseAgyLine).filter((c) => c !== null);
+  const rows = callsToRows(calls);
+  assert.equal(rows.length, 4);
+  const cli = rows.filter((r) => r.backend === "antigravity-cli");
+  assert.equal(cli.length, 2);
+  assert.equal(cli[0].provider, "antigravity");
+  assert.equal(cli.reduce((sum, r) => sum + r.inputTokens, 0), 150);
+  assert.equal(cli.reduce((sum, r) => sum + r.cacheReadTokens, 0), 80);
+  const acp = rows.find((r) => r.backend === "antigravity-acp");
+  assert.equal(acp?.model, "claude-sonnet-4");
+  assert.equal(acp?.outputTokens, 300);
+  const agy = rows.find((r) => r.backend === "agy-proxy");
+  assert.equal(agy?.provider, "harness");
+  assert.equal(agy?.costUsd, 0);
+  assert.ok(rows.every((r) => r.timestampMs > 0));
+});
+
+test("readAgyProxyRows aggregates a fixture file and handles missing/empty", () => {
+  const dir = mkdtempSync(join(tmpdir(), "usage-agy-proxy-"));
+  const path = join(dir, "metrics.jsonl");
+  writeFileSync(path, AGY_LINES);
+  const result = readAgyProxyRows(path);
+  assert.equal(result.status, "ok");
+  assert.equal(result.callsBySource.cli, 2);
+  assert.equal(result.callsBySource.acp, 1);
+  assert.equal(result.callsBySource.agy, 1);
+  assert.equal(result.rows.length, 4);
+
+  const missing = readAgyProxyRows(join(dir, "nope.jsonl"));
+  assert.equal(missing.status, "no_data_source");
+  assert.equal(missing.rows.length, 0);
+
+  const emptyPath = join(dir, "empty.jsonl");
+  writeFileSync(emptyPath, "");
+  assert.equal(readAgyProxyRows(emptyPath).status, "no_data_source");
+});
+
+test("mapSourceStatus: antigravity used via proxied calls when store is empty", () => {
+  const source = mapSourceStatus({
+    provider: { provider: "antigravity" },
+    backendRows: 7,
+    antigravity: { "antigravity-cli": { sessions: 0, steps: 0, lastModifiedMs: 0 } },
+    proxyCalls: { "antigravity-cli": 7 },
+  });
+  assert.equal(source.status, "used");
+  assert.match(source.detail ?? "", /proxied LLM calls/);
 });

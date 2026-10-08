@@ -16,6 +16,7 @@ import {
 import { readOpenCodeRows } from "./adapters/opencode";
 import { readCodexRows } from "./adapters/codex";
 import { collectAntigravity } from "./adapters/antigravity";
+import { readAgyProxyRows } from "./adapters/agy-proxy";
 import { backendForProvider, mapSourceStatus } from "./discovery";
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -107,13 +108,16 @@ export class UsageAggregator {
     }
 
     const antigravity = collectAntigravity();
+    const agyProxy = readAgyProxyRows();
+    rows.push(...agyProxy.rows);
 
     const sources = providerEntries
-      ? this.discoveredSources(providerEntries, rows, antigravity, adapterSources)
+      ? this.discoveredSources(providerEntries, rows, antigravity, agyProxy, adapterSources)
       : [
           ...adapterSources,
           ...(["cli", "acp"] as const).map((kind) => {
             const stats = antigravity[kind];
+            const calls = agyProxy.callsBySource[kind];
             const backend = `antigravity-${kind}` as const;
             const label = kind === "cli" ? "Antigravity (CLI)" : "Antigravity (ACP)";
             if (stats && stats.sessions > 0) {
@@ -122,11 +126,31 @@ export class UsageAggregator {
                 label,
                 status: "used",
                 sessions: stats.sessions,
-                detail: `${stats.sessions} sessions · ${stats.steps} steps · token usage not recorded locally`,
+                detail: `${stats.sessions} sessions · ${stats.steps} steps${calls > 0 ? ` · ${calls} proxied calls` : ""}`,
+              } as SourceStatus;
+            }
+            if (calls > 0) {
+              return {
+                backend,
+                label,
+                status: "used",
+                sessions: calls,
+                detail: `${calls} proxied LLM calls · cost not recorded`,
               } as SourceStatus;
             }
             return { backend, label, status: "never_used" } as SourceStatus;
           }),
+          ...(agyProxy.callsBySource.agy > 0
+            ? [
+                {
+                  backend: "agy-proxy",
+                  label: "Antigravity (harness)",
+                  status: "used",
+                  sessions: agyProxy.callsBySource.agy,
+                  detail: `${agyProxy.callsBySource.agy} proxied LLM calls · cost not recorded`,
+                } as SourceStatus,
+              ]
+            : []),
         ];
 
     const filtered = filterPeriod(rows, period, nowMs);
@@ -176,6 +200,7 @@ export class UsageAggregator {
     providerEntries: ProviderEntry[],
     rows: UsageRow[],
     antigravity: { cli: unknown; acp: unknown },
+    agyProxy: { callsBySource: { cli: number; acp: number; agy: number } },
     adapterSources: SourceStatus[],
   ): SourceStatus[] {
     const rowsByBackend = new Map<string, number>();
@@ -188,6 +213,10 @@ export class UsageAggregator {
         provider,
         backendRows: rowsByBackend.get(backend) ?? 0,
         antigravity: antigravity as never,
+        proxyCalls: {
+          "antigravity-cli": agyProxy.callsBySource.cli,
+          "antigravity-acp": agyProxy.callsBySource.acp,
+        },
       });
     });
     const covered = new Set(providerEntries.map((provider) => backendForProvider(provider.provider)));

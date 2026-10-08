@@ -35,6 +35,8 @@ export interface SourceStatusInput {
   backendRows: number;
   /** Antigravity store stats; undefined means the store was not probed. */
   antigravity?: Partial<Record<"antigravity-cli" | "antigravity-acp", AntigravityStats | null>>;
+  /** Proxied LLM call counts per backend, from agy-usage-proxy. */
+  proxyCalls?: Partial<Record<string, number>>;
   /**
    * Backends where usage is known to exist but no adapter can read it
    * (reserved for future providers; maps to not_implemented).
@@ -44,8 +46,7 @@ export interface SourceStatusInput {
 
 /**
  * Honest status for one Paseo provider:
- * - used: usage rows exist, or (Antigravity) local sessions exist — with the
- *   caveat that token numbers are not recorded locally
+ * - used: usage rows exist, or (Antigravity) local sessions/proxied calls exist
  * - no_data_source: store unreadable/encrypted (probe failed)
  * - not_implemented: usage known to exist but no adapter (future)
  * - never_used: registered in Paseo, zero attributable local activity
@@ -59,23 +60,33 @@ export function mapSourceStatus(input: SourceStatusInput): SourceStatus {
     enabled: provider.enabled,
   };
 
-  if (backendRows > 0) {
-    return { ...base, status: "used", sessions: backendRows, detail: `${backendRows} sessions` };
-  }
   if (ANTIGRAVITY_BACKENDS.has(backend)) {
-    const stats = input.antigravity?.[backend as "antigravity-cli" | "antigravity-acp"];
+    const key = backend as "antigravity-cli" | "antigravity-acp";
+    const stats = input.antigravity?.[key];
+    const calls = input.proxyCalls?.[key] ?? 0;
     if (stats && stats.sessions > 0) {
       return {
         ...base,
         status: "used",
         sessions: stats.sessions,
-        detail: `${stats.sessions} sessions · ${stats.steps} steps · token usage not recorded locally`,
+        detail: `${stats.sessions} sessions · ${stats.steps} steps${calls > 0 ? ` · ${calls} proxied calls` : ""}`,
+      };
+    }
+    if (backendRows > 0 || calls > 0) {
+      return {
+        ...base,
+        status: "used",
+        sessions: backendRows || calls,
+        detail: `${backendRows || calls} proxied LLM calls · cost not recorded`,
       };
     }
     if (stats === undefined) {
       return { ...base, status: "no_data_source", detail: "local store unreadable" };
     }
     return { ...base, status: "never_used" };
+  }
+  if (backendRows > 0) {
+    return { ...base, status: "used", sessions: backendRows, detail: `${backendRows} sessions` };
   }
   if (input.unreadableBackends?.has(backend)) {
     return { ...base, status: "not_implemented", detail: "usage exists but no adapter" };

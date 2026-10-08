@@ -129,9 +129,10 @@ const aggregator = new UsageAggregator();
 for (const period of ["1d", "7d", "30d", "all"] as const) {
   const js = aggregator.summarize(period);
   const sql = groundTruth(period);
-  // codex rows never appear in the opencode SQL; subtract them from the JS side
-  const codexInPeriod = js.byProvider
-    .filter((group) => group.backend === "codex")
+  // Ground truth SQL covers only opencode.db; subtract every other backend
+  // (codex rollouts, agy-usage-proxy calls) from the JS side.
+  const nonOpencode = js.byProvider
+    .filter((group) => group.backend !== "opencode")
     .flatMap((group) => group.entries)
     .reduce(
       (acc, entry) => ({
@@ -146,10 +147,10 @@ for (const period of ["1d", "7d", "30d", "all"] as const) {
   for (const source of js.sources) {
     console.log(`  source ${source.backend}: ${source.status}${source.detail ? ` (${source.detail})` : ""}`);
   }
-  assertPipeline(`${period}.inputTokens`, js.totals.inputTokens - codexInPeriod.inputTokens, sql.inputTokens);
-  assertPipeline(`${period}.outputTokens`, js.totals.outputTokens - codexInPeriod.outputTokens, sql.outputTokens);
-  assertPipeline(`${period}.cacheReadTokens`, js.totals.cacheReadTokens - codexInPeriod.cacheReadTokens, sql.cacheReadTokens);
-  assertPipeline(`${period}.costUsd`, js.totals.costUsd - codexInPeriod.costUsd, sql.costUsd);
+  assertPipeline(`${period}.inputTokens`, js.totals.inputTokens - nonOpencode.inputTokens, sql.inputTokens);
+  assertPipeline(`${period}.outputTokens`, js.totals.outputTokens - nonOpencode.outputTokens, sql.outputTokens);
+  assertPipeline(`${period}.cacheReadTokens`, js.totals.cacheReadTokens - nonOpencode.cacheReadTokens, sql.cacheReadTokens);
+  assertPipeline(`${period}.costUsd`, js.totals.costUsd - nonOpencode.costUsd, sql.costUsd);
   checkSpec(period, js.totals);
 }
 
