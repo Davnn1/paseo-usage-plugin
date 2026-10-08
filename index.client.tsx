@@ -56,16 +56,17 @@ interface PillData {
 }
 
 /**
- * Menu behavior is the surface that renders on every host (mobile included):
- * tap always shows something. Compact on purpose: one title line, one numbers
- * line, then the action. Full breakdown lives in the screen/panel and the
- * hover title. `update({behavior})` replaces the whole behavior on refresh.
+ * Menu behavior is the surface that renders on every host (mobile included).
+ * Minimal on purpose: the sheet shows the session title (host header) plus one
+ * or two disabled info lines — no provider/model, no redirect action. The full
+ * breakdown lives in the Usage panel/screen. `update({behavior})` replaces the
+ * whole behavior on refresh.
  */
 function truncate(value: string, max: number): string {
   return value.length > max ? `${value.slice(0, max - 1)}…` : value;
 }
 
-function buildPillMenu(data: PillData | undefined, openUsage: () => void): PluginButtonMenuEntry[] {
+function buildPillMenu(data: PillData | undefined): PluginButtonMenuEntry[] {
   const noop = { kind: "action" as const, onPress() {} };
   const items: PluginButtonMenuEntry[] = [];
   if (data?.session?.found) {
@@ -73,6 +74,15 @@ function buildPillMenu(data: PillData | undefined, openUsage: () => void): Plugi
       kind: "item",
       id: "title",
       title: truncate(data.session.title || "Session", 44),
+      disabled: true,
+      behavior: noop,
+    });
+    items.push({
+      kind: "item",
+      id: "totals",
+      title:
+        `in ${formatTokens(data.session.inputTokens)} · out ${formatTokens(data.session.outputTokens)} · ` +
+        `hit ${(data.session.cacheHitRatio * 100).toFixed(0)}% · $${data.session.costUsd.toFixed(2)}`,
       disabled: true,
       behavior: noop,
     });
@@ -84,42 +94,24 @@ function buildPillMenu(data: PillData | undefined, openUsage: () => void): Plugi
       disabled: true,
       behavior: noop,
     });
+    items.push({
+      kind: "item",
+      id: "totals",
+      title:
+        `in ${formatTokens(data.daily.inputTokens)} · out ${formatTokens(data.daily.outputTokens)} · ` +
+        `hit ${(data.daily.cacheHitRatio * 100).toFixed(0)}% · $${data.daily.costUsd.toFixed(2)}`,
+      disabled: true,
+      behavior: noop,
+    });
   } else {
     items.push({
       kind: "item",
-      id: "title",
-      title: "Usage unavailable — session not tracked",
+      id: "empty",
+      title: "usage unavailable",
       disabled: true,
       behavior: noop,
     });
   }
-  const metrics = data?.session?.found
-    ? {
-        in: data.session.inputTokens,
-        out: data.session.outputTokens,
-        hit: data.session.cacheHitRatio,
-        cost: data.session.costUsd,
-      }
-    : data?.daily
-      ? { in: data.daily.inputTokens, out: data.daily.outputTokens, hit: data.daily.cacheHitRatio, cost: data.daily.costUsd }
-      : null;
-  items.push({
-    kind: "item",
-    id: "totals",
-    title: metrics
-      ? `${formatTokens(metrics.in)}/${formatTokens(metrics.out)} · ${(metrics.hit * 100).toFixed(0)}% · $${metrics.cost.toFixed(2)}`
-      : "—",
-    disabled: true,
-    behavior: noop,
-  });
-  items.push({ kind: "separator", id: "sep" });
-  items.push({
-    kind: "item",
-    id: "open",
-    title: "Open Usage",
-    icon: "Gauge",
-    behavior: { kind: "action", onPress: openUsage },
-  });
   return items;
 }
 
@@ -133,7 +125,6 @@ function contributeUsagePill(client: PluginClientContext) {
   const pills = new Map<string, PluginButtonRegistration>();
   const timers = new Map<string, ReturnType<typeof setInterval>>();
   const latest = new Map<string, PillData>();
-  const workspaces = new Map<string, string>();
   const lifetime = new AbortController();
   const REFRESH_MS = 60_000;
 
@@ -142,7 +133,6 @@ function contributeUsagePill(client: PluginClientContext) {
     if (timer) clearInterval(timer);
     timers.delete(agentId);
     latest.delete(agentId);
-    workspaces.delete(agentId);
     pills.get(agentId)?.remove();
     pills.delete(agentId);
   };
@@ -171,24 +161,10 @@ function contributeUsagePill(client: PluginClientContext) {
       registration.update({
         ...buildPillText(session, daily),
         icon: "Gauge",
-        behavior: { kind: "menu", items: buildPillMenu(data, () => openUsageFor(agentId)) },
+        behavior: { kind: "menu", items: buildPillMenu(data) },
       });
     } catch (error) {
       console.error("[usage] pill update failed", error);
-    }
-  };
-
-  const openUsageFor = (agentId: string) => {
-    const workspaceId = workspaces.get(agentId);
-    try {
-      client.openPanel("usage-panel", { workspaceId: workspaceId ?? "", agentId });
-    } catch (error) {
-      console.error("[usage] openPanel failed, falling back to screen", error);
-      try {
-        client.openScreen({ screenId: "usage" });
-      } catch (inner) {
-        console.error("[usage] openScreen failed", inner);
-      }
     }
   };
 
@@ -197,9 +173,7 @@ function contributeUsagePill(client: PluginClientContext) {
     const agentId = agent.id;
     const workspaceId = agent.workspaceId;
     drop(agentId);
-    workspaces.set(agentId, workspaceId);
     try {
-      const openUsage = () => openUsageFor(agentId);
       const registration = client.addComposerPill({
         id: "session-usage",
         workspaceId,
@@ -208,7 +182,7 @@ function contributeUsagePill(client: PluginClientContext) {
           title: "Session usage",
           icon: "Gauge",
           label: "…",
-          behavior: { kind: "menu", items: buildPillMenu(latest.get(agentId), openUsage) },
+          behavior: { kind: "menu", items: buildPillMenu(latest.get(agentId)) },
         },
       });
       pills.set(agentId, registration);
