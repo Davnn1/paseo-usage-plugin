@@ -2,7 +2,7 @@ import type { PluginButtonRegistration, PluginClientContext } from "@getpaseo/pl
 import type { PluginSidebarItemProps } from "@getpaseo/plugin/client";
 import { SidebarRow } from "@getpaseo/plugin/client/ui";
 import { UsageScreen } from "./client/usage-screen";
-import { usageSummaryRpc } from "./shared/usage";
+import { usageSessionSummaryRpc, type SessionSummaryOutput } from "./shared/usage";
 
 function UsageItem({ currentScreen, openScreen }: PluginSidebarItemProps) {
   return (
@@ -20,31 +20,31 @@ function formatTokens(value: number): string {
   return String(Math.round(value));
 }
 
-function pillLabel(summary: {
-  totals: {
-    inputTokens: number;
-    outputTokens: number;
-    cacheHitRatio: number;
-    costUsd: number;
-    reasoningTokens: number;
-    cacheReadTokens: number;
-    sessions: number;
-  };
-}): { label: string; title: string } {
-  const { totals } = summary;
-  const label = `${formatTokens(totals.inputTokens)}/${formatTokens(totals.outputTokens)} · ${(totals.cacheHitRatio * 100).toFixed(0)}% · $${totals.costUsd.toFixed(2)}`;
+function formatCost(value: number): string {
+  if (value >= 100) return `$${Math.round(value)}`;
+  if (value >= 10) return `$${value.toFixed(1)}`;
+  return `$${value.toFixed(2)}`;
+}
+
+/** Densest per-character label; width is host chrome, so detail lives in title. */
+function sessionLabel(summary: SessionSummaryOutput): { label: string; title: string } {
+  if (!summary.found) {
+    return { label: "—", title: `Session usage unavailable: ${summary.reason ?? "unknown"}` };
+  }
+  const label = `${formatTokens(summary.inputTokens)}/${formatTokens(summary.outputTokens)}·${(summary.cacheHitRatio * 100).toFixed(0)}%·${formatCost(summary.costUsd)}`;
   const title =
-    `Today: ${formatTokens(totals.inputTokens)} in / ${formatTokens(totals.outputTokens)} out ` +
-    `(reasoning ${formatTokens(totals.reasoningTokens)}), cache hit ${(totals.cacheHitRatio * 100).toFixed(1)}%, ` +
-    `cost $${totals.costUsd.toFixed(2)}, ${totals.sessions} sessions`;
+    `${summary.title || "Session"} — ${formatTokens(summary.inputTokens)} in / ${formatTokens(summary.outputTokens)} out ` +
+    `(reasoning ${formatTokens(summary.reasoningTokens)}), cache read ${formatTokens(summary.cacheReadTokens)}, ` +
+    `write ${formatTokens(summary.cacheWriteTokens)}, hit ${(summary.cacheHitRatio * 100).toFixed(1)}%, ` +
+    `cost $${summary.costUsd.toFixed(4)} · ${summary.provider}/${summary.model}`;
   return { label, title };
 }
 
 /**
- * Per-agent composer pill showing today's usage. Registration follows the owned
- * list subscription pattern: agents.list({subscribe, signal}) delivers a snapshot
- * then updates; a snapshot re-list is idempotent because register() removes the
- * previous pill for the same agent first.
+ * Per-agent composer pill showing the usage of the provider session linked to
+ * that agent. Registration follows the owned list subscription pattern:
+ * agents.list({subscribe, signal}) delivers a snapshot then updates; a snapshot
+ * re-list is idempotent because register() removes the previous pill first.
  */
 function contributeUsagePill(client: PluginClientContext) {
   const pills = new Map<string, PluginButtonRegistration>();
@@ -64,12 +64,12 @@ function contributeUsagePill(client: PluginClientContext) {
     const registration = pills.get(agentId);
     if (!registration || lifetime.signal.aborted) return;
     try {
-      const summary = await client.rpc(usageSummaryRpc, { period: "1d" });
+      const summary = await client.rpc(usageSessionSummaryRpc, { agentId });
       if (lifetime.signal.aborted || !pills.has(agentId)) return;
-      registration.update({ ...pillLabel(summary), icon: "BarChart3" });
+      registration.update({ ...sessionLabel(summary), icon: "BarChart3" });
     } catch {
       if (!lifetime.signal.aborted && pills.has(agentId)) {
-        registration.update({ label: "usage unavailable", icon: "BarChart3" });
+        registration.update({ label: "—", title: "Session usage unavailable", icon: "BarChart3" });
       }
     }
   };
@@ -80,11 +80,11 @@ function contributeUsagePill(client: PluginClientContext) {
     const workspaceId = agent.workspaceId;
     drop(agentId);
     const registration = client.addComposerPill({
-      id: "current-usage",
+      id: "session-usage",
       workspaceId,
       agentId,
       button: {
-        title: "Current usage (today)",
+        title: "Session usage",
         icon: "BarChart3",
         label: "…",
         behavior: {

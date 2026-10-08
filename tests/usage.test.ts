@@ -14,6 +14,12 @@ import {
   type UsageRow,
 } from "../shared/usage";
 import { parseCodexLines } from "../server/adapters/codex";
+import { readSessionRowById } from "../server/adapters/opencode";
+import { extractSessionId, resolveSessionSummary } from "../server/session-lookup";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { backendForProvider, mapSourceStatus } from "../server/discovery";
 
 const NOW = 1_800_000_000_000;
@@ -316,4 +322,101 @@ test("bucketProviderCost groups by providerID and sorts desc", () => {
     { provider: "codex", costUsd: 3.5 },
     { provider: "kimi", costUsd: 3 },
   ]);
+});
+
+// ---------------------------------------------------------------------------
+// Session summary lookup (composer pill)
+// ---------------------------------------------------------------------------
+
+test("extractSessionId reads persistence then runtimeInfo, rejects foreign ids", () => {
+  assert.equal(
+    extractSessionId({ persistence: { sessionId: "ses_abc" }, runtimeInfo: { sessionId: "ses_def" } }),
+    "ses_abc",
+  );
+  assert.equal(extractSessionId({ runtimeInfo: { sessionId: "ses_def" } }), "ses_def");
+  assert.equal(extractSessionId({ persistence: {}, runtimeInfo: {} }), null);
+  assert.equal(extractSessionId({ persistence: { sessionId: "rollout-uuid" } }), null);
+  assert.equal(extractSessionId({ persistence: { sessionId: 42 } }), null);
+  assert.equal(extractSessionId(null), null);
+});
+
+test("readSessionRowById finds a session in a temp db and misses unknown ids", () => {
+  const dir = mkdtempSync(join(tmpdir(), "usage-test-"));
+  const dbPath = join(dir, "test.db");
+  const db = new DatabaseSync(dbPath);
+  db.exec(
+    `CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT, model TEXT, cost REAL DEFAULT 0,
+      tokens_input INTEGER DEFAULT 0, tokens_output INTEGER DEFAULT 0, tokens_reasoning INTEGER DEFAULT 0,
+      tokens_cache_read INTEGER DEFAULT 0, tokens_cache_write INTEGER DEFAULT 0, time_created INTEGER)`,
+  );
+  db.prepare(
+    `INSERT INTO session VALUES ('ses_found', 'Test session', '{"id":"kimi-for-coding","providerID":"kimi"}', 1.5, 100, 10, 5, 900, 50, 12345)`,
+  ).run();
+  db.close();
+
+  const found = readSessionRowById("ses_found", dbPath);
+  assert.equal(found?.title, "Test session");
+  assert.equal(found?.provider, "kimi");
+  assert.equal(found?.inputTokens, 100);
+  assert.equal(found?.cacheHitRatio, 0.9);
+  assert.equal(readSessionRowById("ses_missing", dbPath), null);
+});
+
+test("resolveSessionSummary: found / missing field / not found / non-opencode", () => {
+  const dir = mkdtempSync(join(tmpdir(), "usage-agents-"));
+  const ws = join(dir, "ws1");
+  mkdirSync(ws);
+
+  // found
+  writeFileSync(
+    join(ws, "agent-1.json"),
+    JSON.stringify({ provider: "opencode", persistence: { sessionId: "ses_x" } }),
+  );
+  const stubRead = (sessionId: string) =>
+    sessionId === "ses_x"
+      ? {
+          id: "ses_x",
+          title: "T",
+          provider: "kimi",
+          model: "m",
+          inputTokens: 1,
+          outputTokens: 2,
+          reasoningTokens: 0,
+          cacheReadTokens: 9,
+          cacheWriteTokens: 0,
+          costUsd: 0.5,
+          cacheHitRatio: 0.9,
+          timeCreated: 1,
+        }
+      : null;
+  const found = resolveSessionSummary("agent-1", { agentsDir: dir, readSession: stubRead });
+  assert.equal(found.found, true);
+  assert.equal(found.sessionId, "ses_x");
+  assert.equal(found.title, "T");
+
+  // missing sessionId field
+  writeFileSync(join(ws, "agent-2.json"), JSON.stringify({ provider: "opencode" }));
+  const missing = resolveSessionSummary("agent-2", { agentsDir: dir, readSession: stubRead });
+  assert.equal(missing.found, false);
+  assert.match(missing.reason ?? "", /no linked opencode session/);
+
+  // agent file absent
+  const absent = resolveSessionSummary("agent-3", { agentsDir: dir, readSession: stubRead });
+  assert.equal(absent.found, false);
+  assert.match(absent.reason ?? "", /agent file not found/);
+
+  // session row absent from db
+  writeFileSync(join(ws, "agent-4.json"), JSON.stringify({ persistence: { sessionId: "ses_y" } }));
+  const rowMissing = resolveSessionSummary("agent-4", { agentsDir: dir, readSession: stubRead });
+  assert.equal(rowMissing.found, false);
+  assert.match(rowMissing.reason ?? "", /not in opencode\.db/);
+
+  // non-opencode provider
+  writeFileSync(
+    join(ws, "agent-5.json"),
+    JSON.stringify({ provider: "codex", persistence: { sessionId: "ses_z" } }),
+  );
+  const foreign = resolveSessionSummary("agent-5", { agentsDir: dir, readSession: stubRead });
+  assert.equal(foreign.found, false);
+  assert.match(foreign.reason ?? "", /non-opencode/);
 });

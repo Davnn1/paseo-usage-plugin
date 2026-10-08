@@ -3,7 +3,8 @@ import type { RpcInput } from "@getpaseo/plugin";
 import type { PaseoApi } from "@getpaseo/client";
 import { UsageAggregator } from "./server/aggregator";
 import { listProviderEntries } from "./server/discovery";
-import { usageDashboardRpc, usageRefreshRpc, usageSummaryRpc, type ProviderEntry } from "./shared/usage";
+import { resolveSessionSummary } from "./server/session-lookup";
+import { usageDashboardRpc, usageRefreshRpc, usageSessionSummaryRpc, usageSummaryRpc, type ProviderEntry } from "./shared/usage";
 
 const aggregator = new UsageAggregator();
 
@@ -25,6 +26,9 @@ export default function contribute(server: PluginServerContext) {
   );
   server.handle(usageDashboardRpc, async ({ period }: RpcInput<typeof usageDashboardRpc>, { paseo }) =>
     aggregator.dashboard(period, { providerEntries: await providerSnapshot(paseo) }),
+  );
+  server.handle(usageSessionSummaryRpc, ({ agentId }: RpcInput<typeof usageSessionSummaryRpc>) =>
+    resolveSessionSummary(agentId),
   );
   console.log("Plugin ready");
   return () => {};

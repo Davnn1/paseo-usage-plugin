@@ -97,6 +97,11 @@ Pill per-agent di composer track bar (sejajar pill MCP & Subagents) via `addComp
 - Pill API return `{ update, remove }` (bukan remover polos); `remove()` idempotent; cleanup = remove semua pill + abort.
 - Reload/reconnect: snapshot ulang = daftar ulang pill, jangan duplikat.
 
+## 6. FIX pill (review user 2026-10-08 malam, screenshot desktop)
+1. **Pill scope = PER SESI**, bukan total 1d. Mapping ADA: `~/.paseo/agents/<workspace>/<agentId>.json` → `.persistence.sessionId` / `.runtimeInfo.sessionId` = `ses_...` (opencode). RPC baru `usage.sessionSummary {sessionId}` (atau agentId di-resolve server-side) → row tabel `session` by id (tokens_* + cost sudah per-row). Label pill: `in/out · cache% · $cost` milik SESI itu. Title: breakdown + judul sesi. Backend non-opencode (codex): mapping sesi beda → fallback "—" dulu, jangan ngarang.
+2. **Pill tidak muncul di mobile** — investigasi & fix: cek filter `agent.workspaceId` (mobile entries?), availability addComposerPill di client mobile, logs app; pastikan registrasi jalan di semua client. Audit compact layout.
+3. **Lebar pill** — cek API pill (label length limit? custom width?). Chrome pill milik host; kalau width host-fixed → format label paling padat per karakter, breakdown lengkap di title. Kalau ada jalan melebar → pakai.
+
 ## Handoff (pindah device)
 - Repo: https://github.com/Davnn1/paseo-usage-plugin.git (branch `main`).
 - Install di mesin baru: `git clone` → `npm install` → cek `pluginsEnabled` di `~/.paseo/config.json` daemon lokal → `paseo plugin install ./usage` **dari parent folder (path RELATIF — path absolut = silent no-op, pitfall terverifikasi)** → `paseo plugin ls` harus `running`, cek kolom ERROR.

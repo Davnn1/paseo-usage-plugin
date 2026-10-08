@@ -161,6 +161,35 @@ export const usageDashboardRpc = defineRpc({
   output: usageDashboardOutputSchema,
 });
 
+// ---------------------------------------------------------------------------
+// Per-session summary (composer pill)
+// ---------------------------------------------------------------------------
+
+export const sessionSummaryOutputSchema = z.object({
+  found: z.boolean(),
+  reason: z.string().optional(),
+  backend: z.string().optional(),
+  sessionId: z.string().optional(),
+  title: z.string().optional(),
+  provider: z.string().optional(),
+  model: z.string().optional(),
+  inputTokens: z.number(),
+  outputTokens: z.number(),
+  reasoningTokens: z.number(),
+  cacheReadTokens: z.number(),
+  cacheWriteTokens: z.number(),
+  costUsd: z.number(),
+  cacheHitRatio: z.number(),
+  timeCreated: z.number(),
+});
+export type SessionSummaryOutput = z.infer<typeof sessionSummaryOutputSchema>;
+
+export const usageSessionSummaryRpc = defineRpc({
+  name: "usage.session_summary",
+  input: z.object({ agentId: z.string() }),
+  output: sessionSummaryOutputSchema,
+});
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** YYYY-MM-DD (UTC) for an epoch-ms timestamp. */

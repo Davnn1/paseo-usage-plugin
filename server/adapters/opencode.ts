@@ -4,6 +4,8 @@ import type { UsageRow } from "../../shared/usage";
 const DB_PATH = `${process.env.HOME}/.local/share/opencode/opencode.db`;
 
 interface SessionRecord {
+  id?: string;
+  title?: string;
   model: string | null;
   cost: number;
   tokens_input: number;
@@ -62,4 +64,66 @@ export function parseModelJson(
   } catch {
     return null;
   }
+}
+
+export interface SessionRow {
+  id: string;
+  title: string;
+  provider: string;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  costUsd: number;
+  cacheHitRatio: number;
+  timeCreated: number;
+}
+
+/** Map one raw session table row; null when the model JSON is unusable. */
+export function mapSessionRow(raw: SessionRecord): Omit<SessionRow, "cacheHitRatio"> | null {
+  const parsed = parseModelJson(raw.model);
+  if (!parsed) return null;
+  return {
+    id: raw.id ?? "",
+    title: raw.title ?? "",
+    provider: parsed.providerID || "unknown",
+    model: parsed.id || "unknown",
+    inputTokens: raw.tokens_input ?? 0,
+    outputTokens: raw.tokens_output ?? 0,
+    reasoningTokens: raw.tokens_reasoning ?? 0,
+    cacheReadTokens: raw.tokens_cache_read ?? 0,
+    cacheWriteTokens: raw.tokens_cache_write ?? 0,
+    costUsd: raw.cost ?? 0,
+    timeCreated: raw.time_created ?? 0,
+  };
+}
+
+/** Look up a single session row by id; null when absent or unparseable. */
+export function readSessionRowById(sessionId: string, dbPath: string = DB_PATH): SessionRow | null {
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  try {
+    const raw = db
+      .prepare(
+        `SELECT id, title, model, cost, tokens_input, tokens_output, tokens_reasoning,
+                tokens_cache_read, tokens_cache_write, time_created
+         FROM session WHERE id = ?`,
+      )
+      .get(sessionId) as SessionRecord | undefined;
+    if (!raw) return null;
+    const mapped = mapSessionRow(raw);
+    if (!mapped) return null;
+    return {
+      ...mapped,
+      cacheHitRatio: cacheHit(mapped.cacheReadTokens, mapped.inputTokens),
+    };
+  } finally {
+    db.close();
+  }
+}
+
+function cacheHit(cacheReadTokens: number, inputTokens: number): number {
+  const denom = cacheReadTokens + inputTokens;
+  return denom > 0 ? cacheReadTokens / denom : 0;
 }
