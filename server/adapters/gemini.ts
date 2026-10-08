@@ -32,7 +32,7 @@ export function probeGemini(dir: string = GEMINI_DIR): {
     return {
       status: "no_data_source",
       detail: sawPb
-        ? "usage only stored as protobuf spikes; not parsed"
+        ? "local store terenkripsi (conversations *.pb, magic bytes 84 94 aa 8c; protoc --decode_raw gagal)"
         : "no machine-readable usage data found",
     };
   } catch (error) {

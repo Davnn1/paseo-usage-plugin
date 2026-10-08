@@ -129,6 +129,37 @@ export function UsageScreen({ theme, layout }: PluginScreenProps) {
         borderTopWidth: 1,
         borderTopColor: theme.colors.border,
       } as const,
+      coverage: {
+        gap: 6,
+      } as const,
+      coverageRow: {
+        flexDirection: "row" as const,
+        alignItems: "center" as const,
+        gap: 8,
+      } as const,
+      badge: {
+        paddingHorizontal: 6,
+        paddingVertical: 2,
+        borderRadius: 4,
+        minWidth: 86,
+        alignItems: "center" as const,
+      } as const,
+      badgeText: {
+        color: theme.colors.surface0,
+        fontSize: 10,
+        fontWeight: "700" as const,
+      } as const,
+      coverageName: {
+        color: theme.colors.foreground,
+        fontSize: 12,
+        flexShrink: 1,
+      } as const,
+      coverageMeta: {
+        color: theme.colors.foregroundMuted,
+        fontSize: 11,
+        flex: 1,
+        textAlign: "right" as const,
+      } as const,
       footerText: {
         color: theme.colors.foregroundMuted,
         fontSize: 11,
@@ -236,12 +267,25 @@ export function UsageScreen({ theme, layout }: PluginScreenProps) {
               </ScrollView>
             )}
 
-            <View style={styles.footer}>
-              <Text style={styles.footerText}>Sources</Text>
+            <Text style={styles.sectionTitle}>Coverage</Text>
+            <View style={styles.coverage}>
               {data.sources.map((source) => (
-                <Text key={source.backend} style={styles.footerText}>
-                  {`${source.backend}: ${source.status}${source.detail ? ` — ${source.detail}` : ""}`}
-                </Text>
+                <View key={source.backend} style={styles.coverageRow}>
+                  <View style={[styles.badge, { backgroundColor: badgeColor(source.status, theme) }]}>
+                    <Text style={styles.badgeText}>{source.status}</Text>
+                  </View>
+                  <Text style={styles.coverageName} numberOfLines={1}>
+                    {source.label ?? source.backend}
+                  </Text>
+                  <Text style={styles.coverageMeta} numberOfLines={1}>
+                    {[
+                      source.enabled === false ? "disabled" : null,
+                      source.sessions != null ? `${source.sessions} sessions` : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ") || (source.detail ?? "")}
+                  </Text>
+                </View>
               ))}
               {data.sources.some((source) => source.status === "error") ? (
                 <Text style={styles.footerText}>
@@ -274,6 +318,19 @@ function OverviewCard({
       <Text style={styles.cardValue}>{value}</Text>
     </View>
   );
+}
+
+function badgeColor(status: string, theme: PluginScreenProps["theme"]): string {
+  switch (status) {
+    case "used":
+      return theme.colors.statusSuccess;
+    case "error":
+      return theme.colors.statusDanger;
+    case "no_data_source":
+      return theme.colors.statusWarning;
+    default:
+      return theme.colors.foregroundMuted;
+  }
 }
 
 const COLUMNS: { key: keyof UsageEntry | "provider"; label: string; width: number }[] = [

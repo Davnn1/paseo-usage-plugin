@@ -9,6 +9,7 @@ import {
   type UsageRow,
 } from "../shared/usage";
 import { parseCodexLines } from "../server/adapters/codex";
+import { backendForProvider, mapSourceStatus } from "../server/discovery";
 
 const NOW = 1_800_000_000_000;
 
@@ -164,10 +165,59 @@ test("usage.summary contract validates a full aggregated payload", () => {
     byProvider: [
       { backend: "opencode", provider: "kimi", entries },
     ],
-    sources: [{ backend: "opencode", status: "used", detail: "1 sessions" }],
+    sources: [{ backend: "opencode", status: "used", sessions: 1, detail: "1 sessions" }],
   };
   const parsed = usageSummaryOutputSchema.parse(payload);
   assert.equal(parsed.totals.sessions, 1);
   assert.equal(usageSummaryRpc.input.parse({ period: "7d" }).period, "7d");
   assert.throws(() => usageSummaryRpc.input.parse({ period: "2h" }));
+});
+
+test("backendForProvider maps aliases and passes through unknown ids", () => {
+  assert.equal(backendForProvider("codex"), "codex");
+  assert.equal(backendForProvider("opencode"), "opencode");
+  assert.equal(backendForProvider("antigravity"), "antigravity");
+  assert.equal(backendForProvider("antigravity-acp"), "antigravity-acp");
+  assert.equal(backendForProvider("claude"), "claude");
+  assert.equal(backendForProvider("oh-my-pi"), "oh-my-pi");
+});
+
+test("mapSourceStatus: used when rows exist", () => {
+  const source = mapSourceStatus({
+    provider: { provider: "codex", label: "Codex", enabled: false },
+    backendRows: 3,
+  });
+  assert.equal(source.status, "used");
+  assert.equal(source.sessions, 3);
+  assert.equal(source.backend, "codex");
+  assert.equal(source.label, "Codex");
+  assert.equal(source.enabled, false);
+});
+
+test("mapSourceStatus: no_data_source for antigravity with encrypted store", () => {
+  const source = mapSourceStatus({
+    provider: { provider: "antigravity", label: "Antigravity", enabled: true },
+    backendRows: 0,
+    unreadableDetail: "local store terenkripsi",
+  });
+  assert.equal(source.status, "no_data_source");
+  assert.match(source.detail ?? "", /omniroute/);
+});
+
+test("mapSourceStatus: never_used for registered providers without rows", () => {
+  for (const provider of ["claude", "copilot", "pi", "oh-my-pi", "muse", "kimi", "antigravity-acp"]) {
+    const source = mapSourceStatus({ provider: { provider }, backendRows: 0 });
+    assert.equal(source.status, "never_used", provider);
+  }
+  const opencode = mapSourceStatus({ provider: { provider: "opencode" }, backendRows: 0 });
+  assert.equal(opencode.status, "never_used");
+});
+
+test("mapSourceStatus: not_implemented when usage exists but no adapter", () => {
+  const source = mapSourceStatus({
+    provider: { provider: "claude", label: "Claude" },
+    backendRows: 0,
+    unreadableBackends: new Set(["claude"]),
+  });
+  assert.equal(source.status, "not_implemented");
 });

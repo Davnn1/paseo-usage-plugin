@@ -2,6 +2,7 @@ import {
   aggregateUsage,
   filterPeriod,
   type Period,
+  type ProviderEntry,
   type SourceStatus,
   type UsageEntry,
   type UsageRow,
@@ -10,6 +11,7 @@ import {
 import { readOpenCodeRows } from "./adapters/opencode";
 import { readCodexRows } from "./adapters/codex";
 import { probeGemini } from "./adapters/gemini";
+import { backendForProvider, mapSourceStatus } from "./discovery";
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
@@ -22,49 +24,66 @@ export class UsageAggregator {
   private readonly cache = new Map<Period, CacheEntry>();
 
   /** Force re-aggregation and overwrite the cache entry for a period. */
-  refresh(period: Period, nowMs: number = Date.now()): UsageSummaryOutput {
-    const result = this.build(period, nowMs);
-    this.cache.set(period, { generatedAtMs: nowMs, result });
+  refresh(
+    period: Period,
+    options: { providerEntries?: ProviderEntry[]; nowMs?: number } = {},
+  ): UsageSummaryOutput {
+    const result = this.build(period, options.nowMs ?? Date.now(), options.providerEntries);
+    this.cache.set(period, { generatedAtMs: options.nowMs ?? Date.now(), result });
     return result;
   }
 
   /** Cached read; re-aggregates when the entry is missing or older than the TTL. */
-  summarize(period: Period, nowMs: number = Date.now()): UsageSummaryOutput {
+  summarize(
+    period: Period,
+    options: { providerEntries?: ProviderEntry[]; nowMs?: number } = {},
+  ): UsageSummaryOutput {
+    const nowMs = options.nowMs ?? Date.now();
     const hit = this.cache.get(period);
     if (hit && nowMs - hit.generatedAtMs < CACHE_TTL_MS) return hit.result;
-    return this.refresh(period, nowMs);
+    return this.refresh(period, { ...options, nowMs });
   }
 
-  private build(period: Period, nowMs: number): UsageSummaryOutput {
-    const sources: SourceStatus[] = [];
+  private build(period: Period, nowMs: number, providerEntries?: ProviderEntry[]): UsageSummaryOutput {
+    const adapterSources: SourceStatus[] = [];
     const rows: UsageRow[] = [];
 
     try {
       const opencodeRows = readOpenCodeRows();
       rows.push(...opencodeRows);
-      sources.push({
+      adapterSources.push({
         backend: "opencode",
         status: opencodeRows.length > 0 ? "used" : "never_used",
+        sessions: opencodeRows.length,
         detail: `${opencodeRows.length} sessions`,
       });
     } catch (error) {
-      sources.push({ backend: "opencode", status: "error", detail: String(error) });
+      adapterSources.push({ backend: "opencode", status: "error", detail: String(error) });
     }
 
     try {
       const { rows: codexRows, filesRead, filesSkipped } = readCodexRows();
       rows.push(...codexRows);
-      sources.push({
+      adapterSources.push({
         backend: "codex",
         status: codexRows.length > 0 ? "used" : "never_used",
+        sessions: codexRows.length,
         detail: `${filesRead} sessions${filesSkipped > 0 ? `, ${filesSkipped} skipped` : ""}`,
       });
     } catch (error) {
-      sources.push({ backend: "codex", status: "error", detail: String(error) });
+      adapterSources.push({ backend: "codex", status: "error", detail: String(error) });
     }
 
     const gemini = probeGemini();
-    sources.push({ backend: "gemini", status: gemini.status, detail: gemini.detail });
+    const geminiDetail =
+      gemini.status === "error" ? gemini.detail : "local store terenkripsi (~/.gemini/antigravity *.pb)";
+
+    const sources = providerEntries
+      ? this.discoveredSources(providerEntries, rows, geminiDetail, adapterSources)
+      : [
+          ...adapterSources,
+          { backend: "antigravity", status: gemini.status, detail: gemini.detail } as SourceStatus,
+        ];
 
     const filtered = filterPeriod(rows, period, nowMs);
     const { totals, entries } = aggregateUsage(filtered);
@@ -87,5 +106,34 @@ export class UsageAggregator {
       byProvider: [...byProviderMap.values()],
       sources,
     };
+  }
+
+  /**
+   * One source row per Paseo provider from the daemon snapshot. Adapter-level
+   * errors (a backend that failed to read) are merged in so they still surface.
+   */
+  private discoveredSources(
+    providerEntries: ProviderEntry[],
+    rows: UsageRow[],
+    geminiDetail: string | undefined,
+    adapterSources: SourceStatus[],
+  ): SourceStatus[] {
+    const rowsByBackend = new Map<string, number>();
+    for (const row of rows) {
+      rowsByBackend.set(row.backend, (rowsByBackend.get(row.backend) ?? 0) + 1);
+    }
+    const sources = providerEntries.map((provider) => {
+      const backend = backendForProvider(provider.provider);
+      return mapSourceStatus({
+        provider,
+        backendRows: rowsByBackend.get(backend) ?? 0,
+        unreadableDetail: backend === "antigravity" ? geminiDetail : undefined,
+      });
+    });
+    const covered = new Set(providerEntries.map((provider) => backendForProvider(provider.provider)));
+    for (const source of adapterSources) {
+      if (!covered.has(source.backend)) sources.push(source);
+    }
+    return sources;
   }
 }

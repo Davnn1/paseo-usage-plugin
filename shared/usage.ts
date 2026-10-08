@@ -56,10 +56,21 @@ export type UsageTotals = z.infer<typeof usageTotalsSchema>;
 
 export const sourceStatusSchema = z.object({
   backend: z.string(),
-  status: z.enum(["used", "never_used", "no_data_source", "error"]),
+  label: z.string().optional(),
+  status: z.enum(["used", "never_used", "no_data_source", "not_implemented", "error"]),
+  sessions: z.number().optional(),
+  enabled: z.boolean().optional(),
   detail: z.string().optional(),
 });
 export type SourceStatus = z.infer<typeof sourceStatusSchema>;
+
+/** Provider row from paseo.providers.snapshot(), shape-stable subset. */
+export const providerEntrySchema = z.object({
+  provider: z.string(),
+  label: z.string().optional(),
+  enabled: z.boolean().optional(),
+});
+export type ProviderEntry = z.infer<typeof providerEntrySchema>;
 
 export const usageSummaryInputSchema = z.object({ period: periodSchema });
 export const usageSummaryOutputSchema = z.object({
