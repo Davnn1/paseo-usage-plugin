@@ -102,6 +102,12 @@ Pill per-agent di composer track bar (sejajar pill MCP & Subagents) via `addComp
 2. **Pill tidak muncul di mobile** — investigasi & fix: cek filter `agent.workspaceId` (mobile entries?), availability addComposerPill di client mobile, logs app; pastikan registrasi jalan di semua client. Audit compact layout.
 3. **Lebar pill** — cek API pill (label length limit? custom width?). Chrome pill milik host; kalau width host-fixed → format label paling padat per karakter, breakdown lengkap di title. Kalau ada jalan melebar → pakai.
 
+## 7. FIX round-2 (review user 2026-10-08, screenshot desktop lebar)
+1. **Tabel full width beneran**: container sudah 100% tapi kolom menggumpal kiri (lebar by content). Distribusi kolom ke seluruh lebar (flex per kolom / persentase), header + rows sejajar, tetap horizontal scroll di window sempit.
+2. **Dashboard interaktif**: hover/press di heatmap cell & bar chart → tooltip (tanggal, in/out/cost/sesi). Desktop: Pressable onHoverIn/onHoverOut; mobile: onPress toggle tooltip overlay. Juga pastikan dashboard benar-benar RENDER di client (user pernah lihat build basi — cek query error, jangan return null diam-diam; kasih error state visible).
+3. **Sources/Coverage filter ACTIVE only**: default tampilkan hanya provider yang enabled/active di Paseo (toggle on). Provider disabled yang punya data (codex used) — sembunyikan di default, collapse "show disabled" opsional.
+4. **Label Antigravity**: baris user-facing jangan "gemini: ... protobuf spikes" (membingungkan — memang store-nya di ~/.gemini/antigravity). Rename jadi **Antigravity**, note jelas: "data lokal terenkripsi, tidak terbaca; usage via OmniRoute tetap terhitung di provider omniroute".
+
 ## Handoff (pindah device)
 - Repo: https://github.com/Davnn1/paseo-usage-plugin.git (branch `main`).
 - Install di mesin baru: `git clone` → `npm install` → cek `pluginsEnabled` di `~/.paseo/config.json` daemon lokal → `paseo plugin install ./usage` **dari parent folder (path RELATIF — path absolut = silent no-op, pitfall terverifikasi)** → `paseo plugin ls` harus `running`, cek kolom ERROR.

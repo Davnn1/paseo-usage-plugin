@@ -108,13 +108,20 @@ export class UsageAggregator {
 
     const gemini = probeGemini();
     const geminiDetail =
-      gemini.status === "error" ? gemini.detail : "local store terenkripsi (~/.gemini/antigravity *.pb)";
+      gemini.status === "error"
+        ? gemini.detail
+        : "local data encrypted, unreadable (~/.gemini/antigravity)";
 
     const sources = providerEntries
       ? this.discoveredSources(providerEntries, rows, geminiDetail, adapterSources)
       : [
           ...adapterSources,
-          { backend: "antigravity", status: gemini.status, detail: gemini.detail } as SourceStatus,
+          {
+            backend: "antigravity",
+            label: "Antigravity",
+            status: gemini.status,
+            detail: gemini.detail,
+          } as SourceStatus,
         ];
 
     const filtered = filterPeriod(rows, period, nowMs);

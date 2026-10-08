@@ -1,6 +1,6 @@
 import type { PluginHostProps } from "@getpaseo/plugin/client";
-import { useMemo } from "react";
-import { ScrollView, Text, View } from "react-native";
+import { useMemo, useState } from "react";
+import { Pressable, ScrollView, Text, View } from "react-native";
 import {
   dailyTokens,
   type DailyPoint,
@@ -29,6 +29,20 @@ export function Dashboard({
   data: UsageDashboardOutput;
 } & PluginHostProps) {
   const compact = layout.compact;
+  // Shared hover/press detail line: date + in/out/cost/sessions.
+  const [focus, setFocus] = useState<DailyPoint | null>(null);
+  const focusProps = (point: DailyPoint) => ({
+    onHoverIn: () => setFocus(point),
+    onHoverOut: () => setFocus((current) => (current?.date === point.date ? null : current)),
+    onPress: () => setFocus((current) => (current?.date === point.date ? null : point)),
+  });
+  const focusLine = (hint: string) => (
+    <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11 }} numberOfLines={1}>
+      {focus
+        ? `${focus.date} · in ${formatTokens(focus.inputTokens)} · out ${formatTokens(focus.outputTokens)} · $${focus.costUsd.toFixed(2)} · ${focus.sessions} sessions`
+        : hint}
+    </Text>
+  );
   const styles = useMemo(
     () => ({
       grid: {
@@ -68,7 +82,8 @@ export function Dashboard({
     <View style={styles.grid}>
       <View style={styles.card}>
         <Text style={styles.cardTitle}>OVERVIEW</Text>
-        <Heatmap points={data.heatmapDaily} theme={theme} compact={compact} />
+        <Heatmap points={data.heatmapDaily} theme={theme} compact={compact} focusProps={focusProps} />
+        {focusLine("Hover or press a day for details.")}
       </View>
 
       <View style={styles.card}>
@@ -78,7 +93,8 @@ export function Dashboard({
 
       <View style={styles.card}>
         <Text style={styles.cardTitle}>MODEL USAGE OVER TIME</Text>
-        <TrendChart points={data.series.daily} theme={theme} compact={compact} />
+        <TrendChart points={data.series.daily} theme={theme} compact={compact} focusProps={focusProps} />
+        {focusLine("Hover or press a bar for details.")}
       </View>
 
       <View style={styles.card}>
@@ -97,10 +113,12 @@ function Heatmap({
   points,
   theme,
   compact,
+  focusProps,
 }: {
   points: DailyPoint[];
   theme: PluginHostProps["theme"];
   compact: boolean;
+  focusProps: (point: DailyPoint) => Record<string, unknown>;
 }) {
   const cell = compact ? 9 : 11;
   const gap = 2;
@@ -114,7 +132,7 @@ function Heatmap({
     const anchorWeekday = first.getUTCDay();
     const start = anchor - ((anchorWeekday + 6) % 7) * 24 * 3600 * 1000;
 
-    const cells: { date: string; week: number; weekday: number; tokens: number }[] = [];
+    const cells: { date: string; week: number; weekday: number; tokens: number; point: DailyPoint | null }[] = [];
     const monthLabels: { week: number; label: string }[] = [];
     let lastMonth = -1;
     let maxTokens = 0;
@@ -134,7 +152,7 @@ function Heatmap({
       if (tokens > 0) activeDays += 1;
       totalTokens += tokens;
       if (tokens > maxTokens) maxTokens = tokens;
-      cells.push({ date: d.toISOString().slice(0, 10), week, weekday: d.getUTCDay(), tokens });
+      cells.push({ date: d.toISOString().slice(0, 10), week, weekday: d.getUTCDay(), tokens, point: point ?? null });
     }
     const weeks = Math.max(1, Math.ceil(cells.length / 7));
     return { cells, weeks, monthLabels, activeDays, totalTokens, maxTokens };
@@ -202,9 +220,8 @@ function Heatmap({
                       return <View key={weekday} style={{ width: cell, height: cell }} />;
                     }
                     const level = intensity(cellPoint.tokens);
-                    return (
+                    const cellView = (
                       <View
-                        key={weekday}
                         style={{
                           width: cell,
                           height: cell,
@@ -213,6 +230,13 @@ function Heatmap({
                           opacity: level === 0 ? 0.12 : level,
                         }}
                       />
+                    );
+                    return cellPoint.point ? (
+                      <Pressable key={weekday} {...focusProps(cellPoint.point)}>
+                        {cellView}
+                      </Pressable>
+                    ) : (
+                      <View key={weekday}>{cellView}</View>
                     );
                   })}
                 </View>
@@ -312,10 +336,12 @@ function TrendChart({
   points,
   theme,
   compact,
+  focusProps,
 }: {
   points: DailyPoint[];
   theme: PluginHostProps["theme"];
   compact: boolean;
+  focusProps: (point: DailyPoint) => Record<string, unknown>;
 }) {
   const chartHeight = compact ? 64 : 84;
   const colWidth = compact ? 5 : 7;
@@ -346,9 +372,9 @@ function TrendChart({
             const inRatio = point.inputTokens / maxTokens;
             const outRatio = point.outputTokens / maxTokens;
             const costRatio = point.costUsd / maxCost;
-            return (
+            const hasActivity = point.inputTokens + point.outputTokens > 0;
+            const column = (
               <View
-                key={point.date}
                 style={{
                   width: colWidth,
                   height: chartHeight,
@@ -385,6 +411,13 @@ function TrendChart({
                   }}
                 />
               </View>
+            );
+            return hasActivity ? (
+              <Pressable key={point.date} {...focusProps(point)}>
+                {column}
+              </Pressable>
+            ) : (
+              <View key={point.date}>{column}</View>
             );
           })}
         </View>

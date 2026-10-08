@@ -32,7 +32,7 @@ export function probeGemini(dir: string = GEMINI_DIR): {
     return {
       status: "no_data_source",
       detail: sawPb
-        ? "local store terenkripsi (conversations *.pb, magic bytes 84 94 aa 8c; protoc --decode_raw gagal)"
+        ? "local data encrypted, unreadable (~/.gemini/antigravity conversations *.pb)"
         : "no machine-readable usage data found",
     };
   } catch (error) {

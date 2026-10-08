@@ -30,6 +30,8 @@ function formatPercent(value: number): string {
 
 export function UsageScreen({ theme, layout, host }: PluginScreenProps) {
   const [period, setPeriod] = useState<Period>("30d");
+  const [showDisabled, setShowDisabled] = useState(false);
+  const [tableWidth, setTableWidth] = useState(0);
   const fetchSummary = useRpc(usageSummaryRpc);
   const fetchDashboard = useRpc(usageDashboardRpc);
   const fetchRefresh = useRpc(usageRefreshRpc);
@@ -47,6 +49,7 @@ export function UsageScreen({ theme, layout, host }: PluginScreenProps) {
     mutationFn: (target: Period) => fetchRefresh({ period: target }),
     onSuccess: (data, target) => {
       queryClient.setQueryData(["usage", "summary", target], data);
+      void queryClient.invalidateQueries({ queryKey: ["usage", "dashboard", target] });
     },
   });
 
@@ -84,7 +87,7 @@ export function UsageScreen({ theme, layout, host }: PluginScreenProps) {
         flexDirection: "row" as const,
         flexWrap: "wrap" as const,
         gap: compact ? 8 : 10,
-      },
+      } as const,
       card: {
         flexGrow: 1,
         flexBasis: compact ? "45%" : "22%",
@@ -108,7 +111,6 @@ export function UsageScreen({ theme, layout, host }: PluginScreenProps) {
         fontWeight: "700" as const,
         marginTop: 4,
       } as const,
-      tableScroll: {} as const,
       table: {
         gap: 2,
       } as const,
@@ -130,12 +132,6 @@ export function UsageScreen({ theme, layout, host }: PluginScreenProps) {
       cellMuted: {
         color: theme.colors.foregroundMuted,
         fontSize: 12,
-      } as const,
-      footer: {
-        gap: 4,
-        paddingTop: 6,
-        borderTopWidth: 1,
-        borderTopColor: theme.colors.border,
       } as const,
       coverage: {
         gap: 6,
@@ -194,6 +190,26 @@ export function UsageScreen({ theme, layout, host }: PluginScreenProps) {
   );
 
   const data: UsageSummaryOutput | undefined = query.data;
+
+  // Fill the measured width (minus inter-column gaps); fall back to per-column
+  // minimums and scroll horizontally when the window is too narrow.
+  const columnWidths = useMemo(() => {
+    const gap = 8;
+    const gaps = gap * (COLUMNS.length - 1);
+    const totalWeight = COLUMNS.reduce((sum, column) => sum + column.weight, 0);
+    const minTotal = COLUMNS.reduce((sum, column) => sum + column.minWidth, 0) + gaps;
+    return {
+      widths: COLUMNS.map((column) =>
+        tableWidth > gaps
+          ? Math.max(column.minWidth, ((tableWidth - gaps) * column.weight) / totalWeight)
+          : column.minWidth,
+      ),
+      tableMinWidth: Math.max(tableWidth, minTotal),
+    };
+  }, [tableWidth]);
+
+  const activeSources = data?.sources.filter((source) => source.enabled !== false) ?? [];
+  const disabledSources = data?.sources.filter((source) => source.enabled === false) ?? [];
 
   return (
     <View style={styles.screen}>
@@ -254,51 +270,71 @@ export function UsageScreen({ theme, layout, host }: PluginScreenProps) {
               />
             </View>
 
-            {dashboardQuery.data ? (
+            {dashboardQuery.isError ? (
+              <View>
+                <Text style={styles.message}>Dashboard failed to load.</Text>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Retry loading dashboard"
+                  onPress={() => dashboardQuery.refetch()}
+                  style={styles.retry}
+                >
+                  <Text style={styles.retryText}>Retry</Text>
+                </Pressable>
+              </View>
+            ) : dashboardQuery.data ? (
               <Dashboard data={dashboardQuery.data} theme={theme} layout={layout} host={host} />
-            ) : null}
+            ) : (
+              <Text style={styles.message}>Loading dashboard…</Text>
+            )}
 
             <Text style={styles.sectionTitle}>Usage by model</Text>
             {data.byProvider.length === 0 ? (
               <Text style={styles.message}>No usage recorded for this period.</Text>
             ) : (
-              <ScrollView horizontal style={styles.tableScroll}>
-                <View style={styles.table}>
-                  <TableHeader styles={styles} />
-                  {data.byProvider.flatMap((group) =>
-                    group.entries.map((entry, index) => (
-                      <EntryRow
-                        key={`${group.backend}:${group.provider}:${entry.model}`}
-                        entry={entry}
-                        alt={index % 2 === 1}
-                        styles={styles}
-                      />
-                    )),
-                  )}
-                </View>
-              </ScrollView>
+              <View onLayout={(event) => setTableWidth(event.nativeEvent.layout.width)}>
+                <ScrollView horizontal showsHorizontalScrollIndicator>
+                  <View style={[styles.table, { width: columnWidths.tableMinWidth }]}>
+                    <TableHeader styles={styles} widths={columnWidths.widths} />
+                    {data.byProvider.flatMap((group) =>
+                      group.entries.map((entry, index) => (
+                        <EntryRow
+                          key={`${group.backend}:${group.provider}:${entry.model}`}
+                          entry={entry}
+                          alt={index % 2 === 1}
+                          styles={styles}
+                          widths={columnWidths.widths}
+                        />
+                      )),
+                    )}
+                  </View>
+                </ScrollView>
+              </View>
             )}
 
             <Text style={styles.sectionTitle}>Coverage</Text>
             <View style={styles.coverage}>
-              {data.sources.map((source) => (
-                <View key={source.backend} style={styles.coverageRow}>
-                  <View style={[styles.badge, { backgroundColor: badgeColor(source.status, theme) }]}>
-                    <Text style={styles.badgeText}>{source.status}</Text>
-                  </View>
-                  <Text style={styles.coverageName} numberOfLines={1}>
-                    {source.label ?? source.backend}
-                  </Text>
-                  <Text style={styles.coverageMeta} numberOfLines={1}>
-                    {[
-                      source.enabled === false ? "disabled" : null,
-                      source.sessions != null ? `${source.sessions} sessions` : null,
-                    ]
-                      .filter(Boolean)
-                      .join(" · ") || (source.detail ?? "")}
-                  </Text>
-                </View>
+              {activeSources.map((source) => (
+                <CoverageRow key={source.backend} source={source} styles={styles} theme={theme} />
               ))}
+              {disabledSources.length > 0 ? (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={showDisabled ? "Hide disabled providers" : `Show ${disabledSources.length} disabled providers`}
+                  onPress={() => setShowDisabled((value) => !value)}
+                >
+                  <Text style={styles.footerText}>
+                    {showDisabled
+                      ? "Hide disabled"
+                      : `Show disabled (${disabledSources.length})`}
+                  </Text>
+                </Pressable>
+              ) : null}
+              {showDisabled
+                ? disabledSources.map((source) => (
+                    <CoverageRow key={source.backend} source={source} styles={styles} theme={theme} />
+                  ))
+                : null}
               {data.sources.some((source) => source.status === "error") ? (
                 <Text style={styles.footerText}>
                   One or more sources failed; shown totals may be incomplete.
@@ -332,6 +368,33 @@ function OverviewCard({
   );
 }
 
+function CoverageRow({
+  source,
+  styles,
+  theme,
+}: {
+  source: UsageSummaryOutput["sources"][number];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  styles: any;
+  theme: PluginScreenProps["theme"];
+}) {
+  return (
+    <View style={styles.coverageRow}>
+      <View style={[styles.badge, { backgroundColor: badgeColor(source.status, theme) }]}>
+        <Text style={styles.badgeText}>{source.status}</Text>
+      </View>
+      <Text style={styles.coverageName} numberOfLines={1}>
+        {source.label ?? source.backend}
+      </Text>
+      <Text style={styles.coverageMeta} numberOfLines={1}>
+        {[source.sessions != null ? `${source.sessions} sessions` : null, source.detail ?? ""]
+          .filter(Boolean)
+          .join(" · ")}
+      </Text>
+    </View>
+  );
+}
+
 function badgeColor(status: string, theme: PluginScreenProps["theme"]): string {
   switch (status) {
     case "used":
@@ -345,24 +408,31 @@ function badgeColor(status: string, theme: PluginScreenProps["theme"]): string {
   }
 }
 
-const COLUMNS: { key: keyof UsageEntry | "provider"; label: string; width: number }[] = [
-  { key: "provider", label: "Provider", width: 110 },
-  { key: "model", label: "Model", width: 150 },
-  { key: "inputTokens", label: "In", width: 70 },
-  { key: "outputTokens", label: "Out", width: 70 },
-  { key: "reasoningTokens", label: "Reason", width: 70 },
-  { key: "cacheReadTokens", label: "Cache-R", width: 80 },
-  { key: "cacheWriteTokens", label: "Cache-W", width: 80 },
-  { key: "cacheHitRatio", label: "Hit %", width: 60 },
-  { key: "costUsd", label: "Cost", width: 70 },
-  { key: "sessions", label: "Sesi", width: 50 },
+interface ColumnDef {
+  key: keyof UsageEntry | "provider";
+  label: string;
+  weight: number;
+  minWidth: number;
+}
+
+const COLUMNS: ColumnDef[] = [
+  { key: "provider", label: "Provider", weight: 1.5, minWidth: 96 },
+  { key: "model", label: "Model", weight: 1.7, minWidth: 120 },
+  { key: "inputTokens", label: "In", weight: 1, minWidth: 56 },
+  { key: "outputTokens", label: "Out", weight: 1, minWidth: 56 },
+  { key: "reasoningTokens", label: "Reason", weight: 1, minWidth: 60 },
+  { key: "cacheReadTokens", label: "Cache-R", weight: 1.1, minWidth: 66 },
+  { key: "cacheWriteTokens", label: "Cache-W", weight: 1.1, minWidth: 66 },
+  { key: "cacheHitRatio", label: "Hit %", weight: 0.8, minWidth: 52 },
+  { key: "costUsd", label: "Cost", weight: 1, minWidth: 60 },
+  { key: "sessions", label: "Sesi", weight: 0.7, minWidth: 44 },
 ];
 
-function TableHeader({ styles }: { styles: any }) {
+function TableHeader({ styles, widths }: { styles: any; widths: number[] }) {
   return (
     <View style={styles.row}>
-      {COLUMNS.map((column) => (
-        <Text key={column.key} style={[styles.cellMuted, { width: column.width }]}>
+      {COLUMNS.map((column, index) => (
+        <Text key={column.key} style={[styles.cellMuted, { width: widths[index] }]}>
           {column.label}
         </Text>
       ))}
@@ -374,11 +444,13 @@ function EntryRow({
   entry,
   alt,
   styles,
+  widths,
 }: {
   entry: UsageEntry;
   alt: boolean;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   styles: any;
+  widths: number[];
 }) {
   const valueFor = (key: keyof UsageEntry | "provider"): string => {
     switch (key) {
@@ -402,10 +474,10 @@ function EntryRow({
   };
   return (
     <View style={[styles.row, alt ? styles.rowAlt : null]}>
-      {COLUMNS.map((column) => (
+      {COLUMNS.map((column, index) => (
         <Text
           key={column.key}
-          style={[styles.cell, { width: column.width }]}
+          style={[styles.cell, { width: widths[index] }]}
           numberOfLines={1}
         >
           {valueFor(column.key)}
