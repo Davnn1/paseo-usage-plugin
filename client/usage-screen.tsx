@@ -589,7 +589,7 @@ const COLUMNS: ColumnDef[] = [
   { key: "cacheReadTokens", label: "Cache-R", weight: 1.1, minWidth: 66 },
   { key: "cacheWriteTokens", label: "Cache-W", weight: 1.1, minWidth: 66 },
   { key: "cacheHitRatio", label: "Hit %", weight: 0.8, minWidth: 52 },
-  { key: "ctx", label: "Ctx %", weight: 1.15, minWidth: 78 },
+  { key: "ctx", label: "Last ctx %", weight: 1.15, minWidth: 84 },
   { key: "costUsd", label: "Cost", weight: 1, minWidth: 60 },
   { key: "sessions", label: "Sesi", weight: 0.7, minWidth: 44 },
 ];

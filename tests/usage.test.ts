@@ -338,14 +338,14 @@ test("bucketProviderCost groups by providerID and sorts desc", () => {  const ro
 // Session summary lookup (composer pill)
 // ---------------------------------------------------------------------------
 
-test("extractSessionId reads persistence then runtimeInfo, rejects foreign ids", () => {
+test("extractSessionId reads persistence then runtimeInfo, ignores non-strings", () => {
   assert.equal(
     extractSessionId({ persistence: { sessionId: "ses_abc" }, runtimeInfo: { sessionId: "ses_def" } }),
     "ses_abc",
   );
   assert.equal(extractSessionId({ runtimeInfo: { sessionId: "ses_def" } }), "ses_def");
-  assert.equal(extractSessionId({ persistence: {}, runtimeInfo: {} }), null);
-  assert.equal(extractSessionId({ persistence: { sessionId: "rollout-uuid" } }), null);
+  assert.equal(extractSessionId({ persistence: { sessionId: "9ba0609a-37ba-47e0-9eb4-3a2776e787d4" } }), "9ba0609a-37ba-47e0-9eb4-3a2776e787d4");
+  assert.equal(extractSessionId({ persistence: {} }), null);
   assert.equal(extractSessionId({ persistence: { sessionId: 42 } }), null);
   assert.equal(extractSessionId(null), null);
 });
@@ -416,7 +416,7 @@ test("resolveSessionSummary: found / missing field / not found / non-opencode", 
   assert.match(absent.reason ?? "", /agent file not found/);
 
   // session row absent from db
-  writeFileSync(join(ws, "agent-4.json"), JSON.stringify({ persistence: { sessionId: "ses_y" } }));
+  writeFileSync(join(ws, "agent-4.json"), JSON.stringify({ provider: "opencode", persistence: { sessionId: "ses_y" } }));
   const rowMissing = resolveSessionSummary("agent-4", { agentsDir: dir, readSession: stubRead });
   assert.equal(rowMissing.found, false);
   assert.match(rowMissing.reason ?? "", /not in opencode\.db/);
@@ -448,6 +448,7 @@ const sessionFound = {
   costUsd: 1.2345,
   provider: "kimi",
   model: "kimi-for-coding",
+  ctx: null,
 };
 
 const dailyTotals = {
@@ -718,7 +719,124 @@ test("session resolve stays honest for antigravity agents (no opencode session)"
     join(ws, "agent-agy.json"),
     JSON.stringify({ provider: "antigravity", runtimeInfo: { sessionId: "9ba0609a-37ba-47e0-9eb4-3a2776e787d4" } }),
   );
-  const result = resolveSessionSummary("agent-agy", { agentsDir: dir });
+  const result = resolveSessionSummary("agent-agy", {
+    agentsDir: dir,
+    readAgyCalls: () => ({ calls: [] }), // proxy has no calls for this conversation
+  });
   assert.equal(result.found, false);
-  assert.match(result.reason ?? "", /non-opencode/);
+  assert.match(result.reason ?? "", /no proxied calls/);
+});
+
+// ---------------------------------------------------------------------------
+// Per-session context occupancy
+// ---------------------------------------------------------------------------
+
+test("resolveContextWindow: opencode model families", () => {
+  assert.equal(resolveContextWindow("k3"), 262_144);
+  assert.equal(resolveContextWindow("kimi-k3-0711"), 262_144);
+  assert.equal(resolveContextWindow("qwen3-coder"), 131_072);
+  assert.equal(resolveContextWindow("deepseek-v4-flash"), 131_072);
+  assert.equal(resolveContextWindow("MiMo-v2"), 131_072);
+  assert.equal(resolveContextWindow("glm-4.6"), null);
+});
+
+test("opencode session ctx = last message input+cache.read vs window", () => {
+  const dir = mkdtempSync(join(tmpdir(), "usage-ctx-session-"));
+  const ws = join(dir, "ws1");
+  mkdirSync(ws);
+  writeFileSync(
+    join(ws, "agent-oc.json"),
+    JSON.stringify({ provider: "opencode", persistence: { sessionId: "ses_ctx" }, title: "Ctx session" }),
+  );
+  const result = resolveSessionSummary("agent-oc", {
+    agentsDir: dir,
+    readSession: () => ({
+      id: "ses_ctx",
+      title: "Ctx session",
+      provider: "kimi",
+      model: "k3",
+      inputTokens: 1000,
+      outputTokens: 100,
+      reasoningTokens: 10,
+      cacheReadTokens: 5000,
+      cacheWriteTokens: 0,
+      costUsd: 0.5,
+      cacheHitRatio: 0.83,
+      timeCreated: 1,
+    }),
+    readLastMessage: () => ({ model: "k3", usedTokens: 131_072, timeCreated: 2 }),
+  });
+  assert.equal(result.found, true);
+  // 131072 / 262144 = 50%
+  assert.deepEqual(result.ctx, { usedTokens: 131_072, windowTokens: 262_144, pct: 50 });
+});
+
+test("opencode session ctx stays null when the model window is unknown", () => {
+  const dir = mkdtempSync(join(tmpdir(), "usage-ctx-null-"));
+  const ws = join(dir, "ws1");
+  mkdirSync(ws);
+  writeFileSync(
+    join(ws, "agent-oc2.json"),
+    JSON.stringify({ provider: "opencode", persistence: { sessionId: "ses_ctx2" } }),
+  );
+  const result = resolveSessionSummary("agent-oc2", {
+    agentsDir: dir,
+    readSession: () => ({
+      id: "ses_ctx2", title: "t", provider: "p", model: "mystery",
+      inputTokens: 1, outputTokens: 1, reasoningTokens: 0, cacheReadTokens: 0,
+      cacheWriteTokens: 0, costUsd: 0, cacheHitRatio: 0, timeCreated: 1,
+    }),
+    readLastMessage: () => ({ model: "mystery", usedTokens: 500, timeCreated: 2 }),
+  });
+  assert.equal(result.found, true);
+  assert.equal(result.ctx, null);
+});
+
+test("antigravity session attribution matches conversationId or agentId", () => {
+  const dir = mkdtempSync(join(tmpdir(), "usage-ctx-agy-"));
+  const ws = join(dir, "ws1");
+  mkdirSync(ws);
+  writeFileSync(
+    join(ws, "agent-agy.json"),
+    JSON.stringify({
+      provider: "antigravity",
+      title: "Agy session",
+      persistence: { sessionId: 'plugin:{"version":1,"data":{"conversationId":"conv-1"}}' },
+    }),
+  );
+  const calls = [
+    { ts: "2026-10-08T09:00:00.000Z", source: "cli" as const, model: "gemini-3-flash", status: 200, promptTokens: 100_000, outputTokens: 10, thinkingTokens: 0, cacheReadTokens: 90_000, cacheWriteTokens: 0, conversationId: "conv-1" },
+    { ts: "2026-10-08T10:00:00.000Z", source: "cli" as const, model: "gemini-3-flash", status: 200, promptTokens: 209_715, outputTokens: 20, thinkingTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, conversationId: "conv-1" },
+    { ts: "2026-10-08T11:00:00.000Z", source: "cli" as const, model: "gemini-3-flash", status: 200, promptTokens: 999, outputTokens: 1, thinkingTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, conversationId: "conv-other" },
+    { ts: "2026-10-08T12:00:00.000Z", source: "acp" as const, model: "gemini-3-flash", status: 200, promptTokens: 5, outputTokens: 1, thinkingTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, agentId: "agent-tagged" },
+  ];
+  const byConversation = resolveSessionSummary("agent-agy", {
+    agentsDir: dir,
+    readAgyCalls: () => ({ calls }),
+  });
+  assert.equal(byConversation.found, true);
+  assert.equal(byConversation.backend, "antigravity-cli");
+  assert.equal(byConversation.inputTokens, 100_000 + 209_715); // conv-other excluded
+  // newest matched prompt 209715 / 1048576 = 20.0%
+  assert.deepEqual(byConversation.ctx, { usedTokens: 209_715, windowTokens: 1_048_576, pct: 20 });
+
+  writeFileSync(
+    join(ws, "agent-tagged.json"),
+    JSON.stringify({ provider: "antigravity-acp", persistence: { sessionId: "tag-uuid-1234-5678-90abcdef0123" } }),
+  );
+  const byAgentTag = resolveSessionSummary("agent-tagged", {
+    agentsDir: dir,
+    readAgyCalls: () => ({ calls }),
+  });
+  assert.equal(byAgentTag.found, true);
+  assert.equal(byAgentTag.backend, "antigravity-acp");
+  assert.equal(byAgentTag.ctx?.usedTokens, 5);
+});
+
+test("buildPillText appends ctx suffix only when present", () => {
+  const withCtx = buildPillText({ ...sessionFound, ctx: { usedTokens: 131_072, windowTokens: 262_144, pct: 50 } }, null);
+  assert.match(withCtx.label, /·ctx 50%$/);
+  assert.match(withCtx.title, /ctx 131\.1K\/262\.1K \(50%\)/);
+  const withoutCtx = buildPillText(sessionFound, null);
+  assert.doesNotMatch(withoutCtx.label, /ctx/);
 });

@@ -15,6 +15,8 @@ export interface AgyCall {
   cacheWriteTokens: number;
   /** Optional proxy tag (path /cli/<tag>); extra fields are ignore-safe. */
   agentId?: string;
+  /** Optional Antigravity conversation id for per-session attribution. */
+  conversationId?: string;
 }
 
 export interface AgyProxyResult {
@@ -23,6 +25,8 @@ export interface AgyProxyResult {
   /** One UsageRow per proxied LLM call; each row counts exactly one call. */
   rows: UsageRow[];
   callsBySource: Record<"cli" | "acp" | "agy", number>;
+  /** Parsed calls (ignore-safe extras included) for per-session attribution. */
+  calls: AgyCall[];
   /**
    * Most recent promptTokens per (backend, provider, model) — the Gemini
    * promptTokenCount is already cache-inclusive, so it measures live context
@@ -65,6 +69,7 @@ export function parseAgyLine(line: string): AgyCall | null {
     source,
     model: typeof obj.model === "string" && obj.model ? obj.model : "unknown",
     agentId: typeof obj.agentId === "string" && obj.agentId ? obj.agentId : undefined,
+  conversationId: typeof obj.conversationId === "string" && obj.conversationId ? obj.conversationId : undefined,
     status: num(obj.status),
     promptTokens: num(obj.promptTokens),
     outputTokens: num(obj.outputTokens),
@@ -103,6 +108,7 @@ export function readAgyProxyRows(
     status: "no_data_source",
     rows: [],
     callsBySource: { cli: 0, acp: 0, agy: 0 },
+    calls: [],
     latestPromptByKey: new Map(),
   };
   if (!existsSync(path)) return empty;
@@ -132,5 +138,5 @@ export function readAgyProxyRows(
     }
   }
   if (calls.length === 0) return { ...empty, callsBySource };
-  return { status: "ok", rows: callsToRows(calls), callsBySource, latestPromptByKey };
+  return { status: "ok", rows: callsToRows(calls), callsBySource, calls, latestPromptByKey };
 }

@@ -37,6 +37,24 @@ const FALLBACK_WINDOWS: [prefix: string, tokens: number][] = [
   ["gpt-oss-120b-", 131_072],
 ];
 
+/** Substring fallbacks for providers that embed the family mid-name. */
+const SUBSTRING_WINDOWS: [needle: string, tokens: number][] = [
+  ["qwen", 131_072],
+  ["deepseek", 131_072],
+  ["mimo", 131_072],
+];
+
+function opencodeWindow(model: string): number | null {
+  const lower = model.toLowerCase();
+  if (lower === "k3" || lower.startsWith("k3-") || lower.startsWith("kimi-k3") || lower.startsWith("kimi/k3")) {
+    return 262_144;
+  }
+  for (const [needle, tokens] of SUBSTRING_WINDOWS) {
+    if (lower.includes(needle)) return tokens;
+  }
+  return null;
+}
+
 /** Resolve the context window for a model; null when unknown (rendered as "—").
  *  Pass envOverride (or set AGY_CONTEXT_WINDOWS) for operator-supplied sizes. */
 export function resolveContextWindow(
@@ -57,5 +75,5 @@ export function resolveContextWindow(
   for (const [prefix, tokens] of FALLBACK_WINDOWS) {
     if (model.startsWith(prefix)) return tokens;
   }
-  return null;
+  return opencodeWindow(model);
 }

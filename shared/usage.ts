@@ -189,6 +189,8 @@ export const sessionSummaryOutputSchema = z.object({
   costUsd: z.number(),
   cacheHitRatio: z.number(),
   timeCreated: z.number(),
+  /** Live context occupancy for this session; null when unknown. */
+  ctx: z.object({ usedTokens: z.number(), windowTokens: z.number(), pct: z.number() }).nullable(),
 });
 export type SessionSummaryOutput = z.infer<typeof sessionSummaryOutputSchema>;
 
@@ -220,17 +222,21 @@ export interface PillText {
  * crowded; cost and the full breakdown live in the title/menu.
  */
 export function buildPillText(
-  session: Pick<SessionSummaryOutput, "found" | "reason" | "title" | "inputTokens" | "outputTokens" | "reasoningTokens" | "cacheReadTokens" | "cacheWriteTokens" | "cacheHitRatio" | "costUsd" | "provider" | "model"> | null,
+  session: Pick<SessionSummaryOutput, "found" | "reason" | "title" | "inputTokens" | "outputTokens" | "reasoningTokens" | "cacheReadTokens" | "cacheWriteTokens" | "cacheHitRatio" | "costUsd" | "provider" | "model" | "ctx"> | null,
   daily: UsageTotals | null,
 ): PillText {
   if (session?.found) {
+    const ctxSuffix = session.ctx ? `·ctx ${Math.round(session.ctx.pct)}%` : "";
     return {
-      label: `${compactTokens(session.inputTokens)}/${compactTokens(session.outputTokens)}·${(session.cacheHitRatio * 100).toFixed(0)}%`,
+      label: `${compactTokens(session.inputTokens)}/${compactTokens(session.outputTokens)}·${(session.cacheHitRatio * 100).toFixed(0)}%${ctxSuffix}`,
       title:
         `Session: ${session.title || "untitled"} — ${compactTokens(session.inputTokens)} in / ${compactTokens(session.outputTokens)} out ` +
         `(reasoning ${compactTokens(session.reasoningTokens)}), cache read ${compactTokens(session.cacheReadTokens)}, ` +
         `write ${compactTokens(session.cacheWriteTokens)}, hit ${(session.cacheHitRatio * 100).toFixed(1)}%, ` +
-        `cost $${session.costUsd.toFixed(4)} · ${session.provider}/${session.model}`,
+        `cost $${session.costUsd.toFixed(4)} · ${session.provider}/${session.model}` +
+        (session.ctx
+          ? ` · ctx ${compactTokens(session.ctx.usedTokens)}/${compactTokens(session.ctx.windowTokens)} (${Math.round(session.ctx.pct)}%)`
+          : ""),
     };
   }
   if (daily) {

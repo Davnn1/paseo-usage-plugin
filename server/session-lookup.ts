@@ -1,14 +1,16 @@
 import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import type { SessionSummaryOutput } from "../shared/usage";
-import { readSessionRowById } from "./adapters/opencode";
+import { readLastMessageUsage, readSessionRowById } from "./adapters/opencode";
+import { readAgyProxyRows, type AgyCall } from "./adapters/agy-proxy";
+import { resolveContextWindow } from "./context-windows";
 
 const AGENTS_DIR = `${process.env.HOME}/.paseo/agents`;
 
-function notFound(reason: string): SessionSummaryOutput {
+function emptySummary(): SessionSummaryOutput {
   return {
     found: false,
-    reason,
+    reason: undefined,
     inputTokens: 0,
     outputTokens: 0,
     reasoningTokens: 0,
@@ -17,13 +19,18 @@ function notFound(reason: string): SessionSummaryOutput {
     costUsd: 0,
     cacheHitRatio: 0,
     timeCreated: 0,
+    ctx: null,
   };
+}
+
+function notFound(reason: string): SessionSummaryOutput {
+  return { ...emptySummary(), reason };
 }
 
 /**
  * Extract the linked provider session id from a Paseo agent JSON file.
- * OpenCode sessions look like `ses_...`; anything else is not resolvable
- * against opencode.db and returns null.
+ * OpenCode sessions look like `ses_...`; Antigravity uses a plain conversation
+ * UUID or plugin:{"version":1,"data":{"conversationId":...}}.
  */
 export function extractSessionId(agentJson: unknown): string | null {
   if (typeof agentJson !== "object" || agentJson === null) return null;
@@ -32,7 +39,7 @@ export function extractSessionId(agentJson: unknown): string | null {
     const section = root[path];
     if (typeof section !== "object" || section === null) continue;
     const sessionId = (section as Record<string, unknown>).sessionId;
-    if (typeof sessionId === "string" && sessionId.startsWith("ses_")) return sessionId;
+    if (typeof sessionId === "string" && sessionId) return sessionId;
   }
   return null;
 }
@@ -54,17 +61,24 @@ export function findAgentFile(agentsDir: string, agentId: string): string | null
   return null;
 }
 
+export interface SessionSummaryDeps {
+  agentsDir?: string;
+  readSession?: typeof readSessionRowById;
+  readLastMessage?: typeof readLastMessageUsage;
+  readAgyCalls?: () => { calls: AgyCall[] };
+}
+
 /**
  * Resolve the current usage of the session linked to a Paseo agent.
- * Honest fallbacks: missing agent file, missing/foreign session id, or a
- * session row absent from opencode.db all return found:false with a reason.
+ * - opencode: session table row + live context from the last message
+ * - antigravity / antigravity-acp: agy-usage-proxy calls attributed by
+ *   conversation id (or proxy agentId tag); ctx from the latest call
+ * Honest fallbacks everywhere: missing file, missing id, no matching calls.
  */
-export function resolveSessionSummary(
-  agentId: string,
-  deps: { agentsDir?: string; readSession?: typeof readSessionRowById } = {},
-): SessionSummaryOutput {
+export function resolveSessionSummary(agentId: string, deps: SessionSummaryDeps = {}): SessionSummaryOutput {
   const agentsDir = deps.agentsDir ?? AGENTS_DIR;
   const readSession = deps.readSession ?? readSessionRowById;
+  const readLastMessage = deps.readLastMessage ?? readLastMessageUsage;
 
   const file = findAgentFile(agentsDir, agentId);
   if (!file) return notFound("agent file not found");
@@ -75,20 +89,39 @@ export function resolveSessionSummary(
   } catch {
     return notFound("agent file unreadable");
   }
+  const agent = (typeof agentJson === "object" && agentJson !== null ? agentJson : {}) as Record<string, unknown>;
+  const provider = typeof agent.provider === "string" ? agent.provider : undefined;
+  const title = typeof agent.title === "string" ? agent.title : undefined;
 
-  const provider =
-    typeof agentJson === "object" && agentJson !== null
-      ? (agentJson as Record<string, unknown>).provider
-      : undefined;
-  if (typeof provider === "string" && provider !== "opencode") {
-    return notFound(`non-opencode agent (${provider})`);
+  if (provider === "opencode") return resolveOpenCode(agentId, agentJson, { readSession, readLastMessage });
+  if (provider === "antigravity" || provider === "antigravity-acp") {
+    return resolveAntigravity(agentId, agentJson, provider, title, deps);
   }
+  return notFound(provider ? `non-opencode agent (${provider})` : "provider unknown");
+}
 
+function resolveOpenCode(
+  _agentId: string,
+  agentJson: unknown,
+  deps: { readSession: NonNullable<SessionSummaryDeps["readSession"]>; readLastMessage: NonNullable<SessionSummaryDeps["readLastMessage"]> },
+): SessionSummaryOutput {
   const sessionId = extractSessionId(agentJson);
-  if (!sessionId) return notFound("no linked opencode session");
-
-  const row = readSession(sessionId);
+  if (!sessionId || !sessionId.startsWith("ses_")) return notFound("no linked opencode session");
+  const row = deps.readSession(sessionId);
   if (!row) return notFound(`session ${sessionId} not in opencode.db`);
+
+  let ctx: SessionSummaryOutput["ctx"] = null;
+  const last = deps.readLastMessage(sessionId);
+  if (last) {
+    const windowTokens = resolveContextWindow(last.model);
+    if (windowTokens) {
+      ctx = {
+        usedTokens: last.usedTokens,
+        windowTokens,
+        pct: Math.round((last.usedTokens / windowTokens) * 1000) / 10,
+      };
+    }
+  }
 
   return {
     found: true,
@@ -105,5 +138,81 @@ export function resolveSessionSummary(
     costUsd: row.costUsd,
     cacheHitRatio: row.cacheHitRatio,
     timeCreated: row.timeCreated,
+    ctx,
   };
+}
+
+function resolveAntigravity(
+  agentId: string,
+  agentJson: unknown,
+  provider: "antigravity" | "antigravity-acp",
+  title: string | undefined,
+  deps: SessionSummaryDeps,
+): SessionSummaryOutput {
+  const sessionId = extractSessionId(agentJson);
+  const conversationId = sessionId?.startsWith("plugin:") ? extractPluginConversationId(sessionId) : sessionId;
+  if (!conversationId) return notFound("no linked antigravity conversation");
+
+  const agy = deps.readAgyCalls ? deps.readAgyCalls() : readAgyProxyRows();
+  const matched = agy.calls.filter(
+    (call) => call.conversationId === conversationId || call.agentId === agentId,
+  );
+  if (matched.length === 0) return notFound("no proxied calls for this session");
+
+  const sums = {
+    inputTokens: 0,
+    outputTokens: 0,
+    reasoningTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+  };
+  let latest: AgyCall | null = null;
+  let earliestMs = Number.POSITIVE_INFINITY;
+  for (const call of matched) {
+    sums.inputTokens += call.promptTokens;
+    sums.outputTokens += call.outputTokens;
+    sums.reasoningTokens += call.thinkingTokens;
+    sums.cacheReadTokens += call.cacheReadTokens;
+    sums.cacheWriteTokens += call.cacheWriteTokens;
+    const tsMs = Date.parse(call.ts);
+    if (Number.isFinite(tsMs) && tsMs < earliestMs) earliestMs = tsMs;
+    if (!latest || Date.parse(call.ts) > Date.parse(latest.ts)) latest = call;
+  }
+
+  let ctx: SessionSummaryOutput["ctx"] = null;
+  if (latest) {
+    const windowTokens = resolveContextWindow(latest.model);
+    if (windowTokens) {
+      ctx = {
+        usedTokens: latest.promptTokens,
+        windowTokens,
+        pct: Math.round((latest.promptTokens / windowTokens) * 1000) / 10,
+      };
+    }
+  }
+  const denom = sums.cacheReadTokens + sums.inputTokens;
+
+  return {
+    found: true,
+    backend: provider === "antigravity" ? "antigravity-cli" : "antigravity-acp",
+    sessionId: conversationId,
+    title,
+    provider,
+    model: latest?.model ?? "unknown",
+    ...sums,
+    costUsd: 0,
+    cacheHitRatio: denom > 0 ? sums.cacheReadTokens / denom : 0,
+    timeCreated: Number.isFinite(earliestMs) ? earliestMs : 0,
+    ctx,
+  };
+}
+
+function extractPluginConversationId(sessionId: string): string | null {
+  try {
+    const payload = JSON.parse(sessionId.slice("plugin:".length)) as Record<string, unknown>;
+    const data = payload.data as Record<string, unknown> | undefined;
+    return typeof data?.conversationId === "string" ? data.conversationId : null;
+  } catch {
+    return null;
+  }
 }
