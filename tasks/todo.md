@@ -108,6 +108,10 @@ Pill per-agent di composer track bar (sejajar pill MCP & Subagents) via `addComp
 3. **Sources/Coverage filter ACTIVE only**: default tampilkan hanya provider yang enabled/active di Paseo (toggle on). Provider disabled yang punya data (codex used) — sembunyikan di default, collapse "show disabled" opsional.
 4. **Label Antigravity**: baris user-facing jangan "gemini: ... protobuf spikes" (membingungkan — memang store-nya di ~/.gemini/antigravity). Rename jadi **Antigravity**, note jelas: "data lokal terenkripsi, tidak terbaca; usage via OmniRoute tetap terhitung di provider omniroute".
 
+## 8. FIX round-3 (review user 2026-10-08)
+1. **Pill fallback ke daily** (user setuju): urutan = sesi (session_summary found) → fallback **1d totals** (usage.summary period 1d) saat sesi belum ada / tidak terlacak / backend non-opencode. Title kasih mode eksplisit: "Session: <judul>" vs "Daily fallback — sesi tidak terlacak". Label format sama.
+2. **Mobile: pill + sidebar item tidak muncul** — kemungkinan besar HOST (mobile app connect ke daemon lain yang belum install plugin), tapi tetap harden: (a) pastikan registrasi sidebar + pill jalan tanpa throw di mobile (icon name valid lintas client, SidebarRow dari /client/ui), (b) wrap component render defensively (error di satu kontribusi jangan bunuh yang lain), (c) dokumentasikan checklist user di OVERVIEW.md: cek host picker di header screen, Settings > Sidebar visibility, `paseo plugin ls` di daemon yang di-connect harus memuat `usage running`.
+
 ## Handoff (pindah device)
 - Repo: https://github.com/Davnn1/paseo-usage-plugin.git (branch `main`).
 - Install di mesin baru: `git clone` → `npm install` → cek `pluginsEnabled` di `~/.paseo/config.json` daemon lokal → `paseo plugin install ./usage` **dari parent folder (path RELATIF — path absolut = silent no-op, pitfall terverifikasi)** → `paseo plugin ls` harus `running`, cek kolom ERROR.

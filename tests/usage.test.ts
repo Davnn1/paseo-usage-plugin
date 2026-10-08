@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   aggregateUsage,
+  buildPillText,
   bucketDaily,
   bucketProviderCost,
   bucketWeekly,
@@ -308,8 +309,7 @@ test("mostActiveDay picks the highest-token day", () => {
   assert.equal(mostActiveDay(allZero), null);
 });
 
-test("bucketProviderCost groups by providerID and sorts desc", () => {
-  const rows = [
+test("bucketProviderCost groups by providerID and sorts desc", () => {  const rows = [
     row({ backend: "opencode", provider: "kimi", model: "a", costUsd: 2 }),
     row({ backend: "opencode", provider: "kimi", model: "b", costUsd: 1 }),
     row({ backend: "opencode", provider: "deepseek", model: "c", costUsd: 5 }),
@@ -419,4 +419,59 @@ test("resolveSessionSummary: found / missing field / not found / non-opencode", 
   const foreign = resolveSessionSummary("agent-5", { agentsDir: dir, readSession: stubRead });
   assert.equal(foreign.found, false);
   assert.match(foreign.reason ?? "", /non-opencode/);
+});
+
+// ---------------------------------------------------------------------------
+// Pill fallback chain
+// ---------------------------------------------------------------------------
+
+const sessionFound = {
+  found: true as const,
+  reason: undefined,
+  title: "Fix the thing",
+  inputTokens: 1_500_000,
+  outputTokens: 60_000,
+  reasoningTokens: 5_000,
+  cacheReadTokens: 900_000,
+  cacheWriteTokens: 1_000,
+  cacheHitRatio: 0.9,
+  costUsd: 1.2345,
+  provider: "kimi",
+  model: "kimi-for-coding",
+};
+
+const dailyTotals = {
+  inputTokens: 3_000_000,
+  outputTokens: 300_000,
+  reasoningTokens: 50_000,
+  cacheReadTokens: 9_000_000,
+  cacheWriteTokens: 10_000,
+  costUsd: 12.34,
+  sessions: 7,
+  cacheHitRatio: 0.75,
+};
+
+test("buildPillText: session found → session numbers, Session: title", () => {
+  const text = buildPillText(sessionFound, dailyTotals);
+  assert.equal(text.label, "1.5M/60.0K·90%·$1.23");
+  assert.match(text.title, /^Session: Fix the thing/);
+  assert.match(text.title, /kimi\/kimi-for-coding/);
+});
+
+test("buildPillText: session not found → daily fallback with reason in title", () => {
+  const text = buildPillText({ ...sessionFound, found: false, reason: "no linked opencode session" }, dailyTotals);
+  assert.equal(text.label, "3.0M/300.0K·75%·$12.3");
+  assert.match(text.title, /^Daily fallback — session not tracked: no linked opencode session/);
+  assert.match(text.title, /7 sessions/);
+});
+
+test("buildPillText: null session with daily still falls back", () => {
+  const text = buildPillText(null, dailyTotals);
+  assert.match(text.title, /^Daily fallback — session not tracked\./);
+});
+
+test("buildPillText: no session and no daily → honest placeholder", () => {
+  const text = buildPillText(null, null);
+  assert.equal(text.label, "—");
+  assert.equal(text.title, "Usage unavailable");
 });

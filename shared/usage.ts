@@ -190,6 +190,57 @@ export const usageSessionSummaryRpc = defineRpc({
   output: sessionSummaryOutputSchema,
 });
 
+// ---------------------------------------------------------------------------
+// Composer pill text: session-first with daily fallback
+// ---------------------------------------------------------------------------
+
+function compactTokens(value: number): string {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
+  return String(Math.round(value));
+}
+
+function compactCost(value: number): string {
+  if (value >= 100) return `$${Math.round(value)}`;
+  if (value >= 10) return `$${value.toFixed(1)}`;
+  return `$${value.toFixed(2)}`;
+}
+
+export interface PillText {
+  label: string;
+  title: string;
+}
+
+/**
+ * Pill copy: linked session usage when available, otherwise the global daily
+ * total. Title always names the mode so the fallback is never silent.
+ */
+export function buildPillText(
+  session: Pick<SessionSummaryOutput, "found" | "reason" | "title" | "inputTokens" | "outputTokens" | "reasoningTokens" | "cacheReadTokens" | "cacheWriteTokens" | "cacheHitRatio" | "costUsd" | "provider" | "model"> | null,
+  daily: UsageTotals | null,
+): PillText {
+  if (session?.found) {
+    return {
+      label: `${compactTokens(session.inputTokens)}/${compactTokens(session.outputTokens)}·${(session.cacheHitRatio * 100).toFixed(0)}%·${compactCost(session.costUsd)}`,
+      title:
+        `Session: ${session.title || "untitled"} — ${compactTokens(session.inputTokens)} in / ${compactTokens(session.outputTokens)} out ` +
+        `(reasoning ${compactTokens(session.reasoningTokens)}), cache read ${compactTokens(session.cacheReadTokens)}, ` +
+        `write ${compactTokens(session.cacheWriteTokens)}, hit ${(session.cacheHitRatio * 100).toFixed(1)}%, ` +
+        `cost $${session.costUsd.toFixed(4)} · ${session.provider}/${session.model}`,
+    };
+  }
+  if (daily) {
+    return {
+      label: `${compactTokens(daily.inputTokens)}/${compactTokens(daily.outputTokens)}·${(daily.cacheHitRatio * 100).toFixed(0)}%·${compactCost(daily.costUsd)}`,
+      title:
+        `Daily fallback — session not tracked${session?.reason ? `: ${session.reason}` : ""}. ` +
+        `${compactTokens(daily.inputTokens)} in / ${compactTokens(daily.outputTokens)} out, ` +
+        `cache hit ${(daily.cacheHitRatio * 100).toFixed(1)}%, cost $${daily.costUsd.toFixed(2)}, ${daily.sessions} sessions`,
+    };
+  }
+  return { label: "—", title: "Usage unavailable" };
+}
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** YYYY-MM-DD (UTC) for an epoch-ms timestamp. */

@@ -1,50 +1,48 @@
 import type { PluginButtonRegistration, PluginClientContext } from "@getpaseo/plugin/client";
 import type { PluginSidebarItemProps } from "@getpaseo/plugin/client";
 import { SidebarRow } from "@getpaseo/plugin/client/ui";
+import { Text, View } from "react-native";
 import { UsageScreen } from "./client/usage-screen";
-import { usageSessionSummaryRpc, type SessionSummaryOutput } from "./shared/usage";
+import { buildPillText, usageSessionSummaryRpc, usageSummaryRpc, type SessionSummaryOutput, type UsageTotals } from "./shared/usage";
 
 function UsageItem({ currentScreen, openScreen }: PluginSidebarItemProps) {
   return (
     <SidebarRow
-      icon="BarChart3"
+      icon="Gauge"
       active={currentScreen?.screenId === "usage"}
       onPress={() => openScreen({ screenId: "usage" })}
     />
   );
 }
 
-function formatTokens(value: number): string {
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
-  return String(Math.round(value));
-}
-
-function formatCost(value: number): string {
-  if (value >= 100) return `$${Math.round(value)}`;
-  if (value >= 10) return `$${value.toFixed(1)}`;
-  return `$${value.toFixed(2)}`;
-}
-
-/** Densest per-character label; width is host chrome, so detail lives in title. */
-function sessionLabel(summary: SessionSummaryOutput): { label: string; title: string } {
-  if (!summary.found) {
-    return { label: "—", title: `Session usage unavailable: ${summary.reason ?? "unknown"}` };
+/** One contribution throwing must not kill the others. */
+function SafeUsageItem(props: PluginSidebarItemProps) {
+  try {
+    return <UsageItem {...props} />;
+  } catch (error) {
+    console.error("[usage] sidebar item render failed", error);
+    return (
+      <View>
+        <Text style={{ color: props.theme.colors.foregroundMuted, fontSize: 12 }}>Usage</Text>
+      </View>
+    );
   }
-  const label = `${formatTokens(summary.inputTokens)}/${formatTokens(summary.outputTokens)}·${(summary.cacheHitRatio * 100).toFixed(0)}%·${formatCost(summary.costUsd)}`;
-  const title =
-    `${summary.title || "Session"} — ${formatTokens(summary.inputTokens)} in / ${formatTokens(summary.outputTokens)} out ` +
-    `(reasoning ${formatTokens(summary.reasoningTokens)}), cache read ${formatTokens(summary.cacheReadTokens)}, ` +
-    `write ${formatTokens(summary.cacheWriteTokens)}, hit ${(summary.cacheHitRatio * 100).toFixed(1)}%, ` +
-    `cost $${summary.costUsd.toFixed(4)} · ${summary.provider}/${summary.model}`;
-  return { label, title };
+}
+
+function safeCleanup(label: string, fn: () => () => void): () => void {
+  try {
+    return fn();
+  } catch (error) {
+    console.error(`[usage] ${label} registration failed`, error);
+    return () => {};
+  }
 }
 
 /**
- * Per-agent composer pill showing the usage of the provider session linked to
- * that agent. Registration follows the owned list subscription pattern:
- * agents.list({subscribe, signal}) delivers a snapshot then updates; a snapshot
- * re-list is idempotent because register() removes the previous pill first.
+ * Per-agent composer pill: usage of the linked provider session, falling back
+ * to the global daily total when the session is untracked. Owned list
+ * subscription pattern: agents.list({subscribe, signal}); snapshot re-list is
+ * idempotent because register() drops the previous pill first.
  */
 function contributeUsagePill(client: PluginClientContext) {
   const pills = new Map<string, PluginButtonRegistration>();
@@ -63,14 +61,25 @@ function contributeUsagePill(client: PluginClientContext) {
   const refreshPill = async (agentId: string) => {
     const registration = pills.get(agentId);
     if (!registration || lifetime.signal.aborted) return;
+    let session: SessionSummaryOutput | null = null;
+    let daily: UsageTotals | null = null;
     try {
-      const summary = await client.rpc(usageSessionSummaryRpc, { agentId });
-      if (lifetime.signal.aborted || !pills.has(agentId)) return;
-      registration.update({ ...sessionLabel(summary), icon: "BarChart3" });
+      session = await client.rpc(usageSessionSummaryRpc, { agentId });
     } catch {
-      if (!lifetime.signal.aborted && pills.has(agentId)) {
-        registration.update({ label: "—", title: "Session usage unavailable", icon: "BarChart3" });
+      session = null;
+    }
+    if (!session?.found) {
+      try {
+        daily = (await client.rpc(usageSummaryRpc, { period: "1d" })).totals;
+      } catch {
+        daily = null;
       }
+    }
+    if (lifetime.signal.aborted || !pills.has(agentId)) return;
+    try {
+      registration.update({ ...buildPillText(session, daily), icon: "Gauge" });
+    } catch (error) {
+      console.error("[usage] pill update failed", error);
     }
   };
 
@@ -79,31 +88,45 @@ function contributeUsagePill(client: PluginClientContext) {
     const agentId = agent.id;
     const workspaceId = agent.workspaceId;
     drop(agentId);
-    const registration = client.addComposerPill({
-      id: "session-usage",
-      workspaceId,
-      agentId,
-      button: {
-        title: "Session usage",
-        icon: "BarChart3",
-        label: "…",
-        behavior: {
-          kind: "action",
-          onPress() {
-            client.openScreen({ screenId: "usage" });
+    try {
+      const registration = client.addComposerPill({
+        id: "session-usage",
+        workspaceId,
+        agentId,
+        button: {
+          title: "Session usage",
+          icon: "Gauge",
+          label: "…",
+          behavior: {
+            kind: "action",
+            onPress() {
+              try {
+                client.openScreen({ screenId: "usage" });
+              } catch (error) {
+                console.error("[usage] openScreen failed", error);
+              }
+            },
           },
         },
-      },
-    });
-    pills.set(agentId, registration);
-    void refreshPill(agentId);
-    timers.set(agentId, setInterval(() => void refreshPill(agentId), REFRESH_MS));
+      });
+      pills.set(agentId, registration);
+      void refreshPill(agentId);
+      timers.set(agentId, setInterval(() => void refreshPill(agentId), REFRESH_MS));
+    } catch (error) {
+      console.error("[usage] addComposerPill failed", error);
+    }
   };
 
   const removeAll = () => {
     for (const timer of timers.values()) clearInterval(timer);
     timers.clear();
-    for (const pill of pills.values()) pill.remove();
+    for (const pill of pills.values()) {
+      try {
+        pill.remove();
+      } catch {
+        /* idempotent best effort */
+      }
+    }
     pills.clear();
   };
 
@@ -135,10 +158,17 @@ function contributeUsagePill(client: PluginClientContext) {
 }
 
 export default function contribute(client: PluginClientContext) {
-  client.addScreen({ id: "usage", title: "Usage", Component: UsageScreen });
-  client.addSidebarHeaderItem({ id: "usage", title: "Usage", Component: UsageItem });
-  const cleanupPill = contributeUsagePill(client);
+  const cleanups: (() => void)[] = [];
+  cleanups.push(safeCleanup("screen", () => client.addScreen({ id: "usage", title: "Usage", Component: UsageScreen })));
+  cleanups.push(safeCleanup("sidebar", () => client.addSidebarHeaderItem({ id: "usage", title: "Usage", Component: SafeUsageItem })));
+  cleanups.push(safeCleanup("pill", () => contributeUsagePill(client)));
   return () => {
-    cleanupPill();
+    for (const cleanup of cleanups) {
+      try {
+        cleanup();
+      } catch {
+        /* best effort */
+      }
+    }
   };
 }
