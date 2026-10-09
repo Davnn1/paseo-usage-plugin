@@ -12,10 +12,11 @@ Every entry shows the same Usage view (period selector, overview cards, dashboar
 
 | Entry | Where it appears |
 | --- | --- |
-| Workspace panel "Monitoring" | Tab beside agents and terminals; the surface that renders on every host including mobile |
-| Composer pill detail card | Per-agent track bar: tap opens a compact metric card (input, output, reasoning, cache read/write, cache hit with a progress bar, cost; daily fallback when the session is untracked). Info only — open Monitoring via the panel, Command Center, or sidebar |
-| Command Center "Open Monitoring" | ⌘K / Ctrl+K, in the workspace scope; opens the Monitoring panel |
+| Search / Command Center "Open Monitoring" | ⌘K / Ctrl+K on every client, including mobile - the primary way in |
 | Sidebar header row | Desktop sidebar header (single entry; no footer duplicate) |
+| Composer pill detail card | Per-agent track bar: tap opens a compact metric card (input, output, reasoning, cache read/write, cache hit with a progress bar, cost; daily fallback when the session is untracked). Info only - open Monitoring via Search or the sidebar |
+
+The plugin intentionally registers no workspace panel, so no "Monitoring" entry appears in the + menu; Search is the cross-platform entry point. |
 
 ## Troubleshooting
 

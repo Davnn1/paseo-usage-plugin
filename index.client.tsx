@@ -1,4 +1,4 @@
-import type { PluginButtonContentProps, PluginButtonRegistration, PluginClientContext, PluginWorkspacePanelProps } from "@getpaseo/plugin/client";
+import type { PluginButtonContentProps, PluginButtonRegistration, PluginClientContext } from "@getpaseo/plugin/client";
 import type { PluginSidebarItemProps } from "@getpaseo/plugin/client";
 import { SidebarRow } from "@getpaseo/plugin/client/ui";
 import { Text, View } from "react-native";
@@ -13,11 +13,6 @@ function UsageItem({ currentScreen, openScreen }: PluginSidebarItemProps) {
       onPress={() => openScreen({ screenId: "usage" })}
     />
   );
-}
-
-/** Workspace panel reuses the full screen body; panels carry no route params. */
-function UsagePanel(props: PluginWorkspacePanelProps) {
-  return <UsageScreen {...props} params={{}} />;
 }
 
 /** One contribution throwing must not kill the others. */
@@ -271,19 +266,6 @@ function contributeUsagePill(client: PluginClientContext) {
 export default function contribute(client: PluginClientContext) {
   const cleanups: (() => void)[] = [];
   cleanups.push(safeCleanup("screen", () => client.addScreen({ id: "usage", title: "Monitoring", Component: UsageScreen })));
-  // Workspace panels render as tabs beside agents/terminals, the surface that
-  // is reliably present on mobile hosts (unlike sidebar header items).
-  cleanups.push(
-    safeCleanup("workspace-panel", () =>
-      client.addWorkspacePanel({
-        id: "usage-panel",
-        title: "Monitoring",
-        icon: "Activity",
-        context: "workspace",
-        Component: UsagePanel,
-      }),
-    ),
-  );
   cleanups.push(safeCleanup("sidebar-header", () => client.addSidebarHeaderItem({ id: "usage", title: "Monitoring", Component: SafeUsageItem })));
   cleanups.push(
     safeCleanup("command-center", () =>
@@ -293,16 +275,11 @@ export default function contribute(client: PluginClientContext) {
         icon: "Activity",
         keywords: ["usage", "tokens", "cost", "dashboard"],
         context: "workspace",
-        onSelect({ openPanel }) {
+        onSelect({ openScreen }) {
           try {
-            openPanel("usage-panel");
+            openScreen({ screenId: "usage" });
           } catch (error) {
-            console.error("[usage] command center openPanel failed, falling back to screen", error);
-            try {
-              client.openScreen({ screenId: "usage" });
-            } catch (inner) {
-              console.error("[usage] command center openScreen failed", inner);
-            }
+            console.error("[usage] command center openScreen failed", error);
           }
         },
       }),
