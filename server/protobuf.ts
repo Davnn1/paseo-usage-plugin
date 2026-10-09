@@ -77,7 +77,10 @@ function tryParseMessage(bytes: Uint8Array): WireMessage | null {
   return parsed;
 }
 
-function parseStrict(buf: Uint8Array): WireMessage | null {
+const MAX_DEPTH = 50;
+
+function parseStrict(buf: Uint8Array, depth = 0): WireMessage | null {
+  if (depth > MAX_DEPTH) return null;
   const fields: WireMessage = new Map();
   let pos = 0;
   while (pos < buf.length) {
@@ -100,7 +103,7 @@ function parseStrict(buf: Uint8Array): WireMessage | null {
       if (end > buf.length) return null;
       const bytes = buf.subarray(pos, end);
       pos = end;
-      const children = bytes.length > 0 && looksLikeMessage(bytes) ? parseStrict(bytes) : null;
+      const children = bytes.length > 0 && looksLikeMessage(bytes) ? parseStrict(bytes, depth + 1) : null;
       push(fields, fieldNumber, { kind: "bytes", value: bytes, children });
     } else if (wireType === 5) {
       pos += 4;

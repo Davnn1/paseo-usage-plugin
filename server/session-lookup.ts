@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { SessionSummaryOutput } from "../shared/usage";
 import { readSessionRowById } from "./adapters/opencode";
 import { readAgyProxyRows, type AgyCall } from "./adapters/agy-proxy";
+import { scanConversationDb } from "./adapters/antigravity";
 
 const AGENTS_DIR = `${process.env.HOME}/.paseo/agents`;
 
@@ -63,6 +64,8 @@ export interface SessionSummaryDeps {
   agentsDir?: string;
   readSession?: typeof readSessionRowById;
   readAgyCalls?: () => { calls: AgyCall[] };
+  /** Override the antigravity store home (tests point this at fixtures). */
+  agyHome?: string;
 }
 
 /**
@@ -138,7 +141,11 @@ function resolveAntigravity(
   const matched = agy.calls.filter(
     (call) => call.conversationId === conversationId || call.agentId === agentId,
   );
-  if (matched.length === 0) return notFound("no proxied calls for this session");
+  if (matched.length === 0) {
+    // Proxy knows nothing yet (or predates it) - fall back to the decoded
+    // conversation store so the pill reflects real session usage.
+    return resolveAntigravityFromStore(agentId, conversationId, provider, title, deps);
+  }
 
   const sums = {
     inputTokens: 0,
@@ -173,6 +180,61 @@ function resolveAntigravity(
     costUsd: 0,
     cacheHitRatio: denom > 0 ? sums.cacheReadTokens / denom : 0,
     timeCreated: Number.isFinite(earliestMs) ? earliestMs : 0,
+  };
+}
+
+function resolveAntigravityFromStore(
+  agentId: string,
+  conversationId: string,
+  provider: "antigravity" | "antigravity-acp",
+  title: string | undefined,
+  deps: SessionSummaryDeps,
+): SessionSummaryOutput {
+  const home = deps.agyHome ?? process.env.HOME ?? "";
+  const dirs =
+    provider === "antigravity"
+      ? [join(home, ".gemini", "antigravity-cli", "conversations")]
+      : [join(home, ".gemini", "antigravity-acp", "conversations")];
+  let generations: ReturnType<typeof scanConversationDb>["generations"] = [];
+  for (const dir of dirs) {
+    const candidate = join(dir, `${conversationId}.db`);
+    if (!existsSync(candidate)) continue;
+    try {
+      generations = scanConversationDb(candidate).generations.filter(
+        (generation) => generation.conversationId === null || generation.conversationId === conversationId,
+      );
+      if (generations.length > 0) break;
+    } catch {
+      /* unreadable store: stay honest */
+    }
+  }
+  if (generations.length === 0) return notFound("no usage recorded for this session");
+
+  const sums = { inputTokens: 0, outputTokens: 0, reasoningTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
+  let earliestMs = Number.POSITIVE_INFINITY;
+  let latestModel = "unknown";
+  let context: { used: number; max: number } | null = null;
+  for (const generation of generations) {
+    sums.inputTokens += generation.inputTokens;
+    sums.outputTokens += generation.outputTokens;
+    if (generation.tsMs < earliestMs) earliestMs = generation.tsMs;
+    latestModel = generation.model;
+    if (generation.contextUsed !== null && generation.contextMax !== null) {
+      context = { used: generation.contextUsed, max: generation.contextMax };
+    }
+  }
+  return {
+    found: true,
+    backend: provider === "antigravity" ? "antigravity-cli" : "antigravity-acp",
+    sessionId: conversationId,
+    title,
+    provider,
+    model: latestModel,
+    ...sums,
+    costUsd: 0,
+    cacheHitRatio: 0,
+    timeCreated: Number.isFinite(earliestMs) ? earliestMs : 0,
+    ...(context ? { detail: `ctx ${context.used}/${context.max} latest` } : {}),
   };
 }
 

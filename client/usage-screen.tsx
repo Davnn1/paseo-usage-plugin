@@ -6,14 +6,13 @@ import { Pressable, RefreshControl, ScrollView, Text, TextInput, View } from "re
 import { Dashboard } from "./dashboard";
 import { usageDashboardRpc, usageRefreshRpc, usageSummaryRpc, type Period, type UsageEntry, type UsageSummaryOutput } from "../shared/usage";
 
-const PERIODS: { id: Mode; label: string }[] = [
-  { id: "1d", label: "1d" },
-  { id: "7d", label: "7d" },
-  { id: "30d", label: "30d" },
-  { id: "week", label: "Week" },
-  { id: "month", label: "Month" },
-  { id: "all", label: "All" },
-  { id: "custom", label: "Custom" },
+const PERIODS: { id: Mode; label: string; hint: string }[] = [
+  { id: "1d", label: "1d", hint: "Today" },
+  { id: "7d", label: "7d", hint: "Last 7 days" },
+  { id: "week", label: "Week", hint: "This week, Monday to Sunday" },
+  { id: "month", label: "Month", hint: "This calendar month" },
+  { id: "all", label: "All", hint: "All time" },
+  { id: "custom", label: "Custom", hint: "Custom date range" },
 ];
 
 type Mode = Period | "week" | "month" | "custom";
@@ -279,7 +278,7 @@ export function UsageScreen({ theme, layout, host }: PluginScreenProps) {
             <Pressable
               key={item.id}
               accessibilityRole="button"
-              accessibilityLabel={`Period ${item.label}`}
+              accessibilityLabel={item.hint}
               onPress={() => setMode(item.id)}
               style={styles.periodButton(mode === item.id)}
             >
