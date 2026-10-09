@@ -146,6 +146,12 @@ Strategi: cek dulu jalur TANPA proxy — wire protocol agy bawa token (inputToke
 2. **Recon binary agy**: env support (HTTPS_PROXY / *_BASE_URL / *_ENDPOINT / SSL_CERT_FILE) via strings + lokasi binary.
 3. **Keputusan (2026-10-09, spike SELESAI)**: usage LOKAL BISA DIBACA. Field map `gen_metadata.data` protobuf: **f1.4.2=input_tokens, f1.4.3=output_tokens**, f1.4.5/f1.4.9-10=kumulatif, **f1.19=model**, **f1.9.10={context_used, context_max}** ← meter! Validated 2 ACP db + 1 CLI db. cache_read TIDAK ada di blob (hanya wire frame) → kolom cache = 0/null jujur. **Keputusan: adapter decode protobuf (zero-dep walker) — BUKAN proxy.** Proxy (pola kimi-proxy; binary agy dukung HTTPS_PROXY/SSL_CERT_FILE/GOOGLE_GEMINI_BASE_URL; endpoint aicode.googleapis.com dll.) ditunda opsional — hanya kalau butuh cache_read real-time.
 
+## 14. FIX tooltip & card layout (review user 2026-10-09)
+1. **Tooltip flicker** (Model Usage Over Time): "kedap kedip gajelas" — layer tooltip wajib `pointerEvents:"none"` (jangan intercept hover), state update hanya saat target bar berubah, jangan re-render loop.
+2. **Tooltip FREE-FLOATING**: layer tooltip absolute di ROOT dashboard (bukan dalam card), zIndex tinggi, posisi dari `measureInWindow` elemen sumber + clamp ke window — bebas melewati batas card. Berlaku untuk semua chart (heatmap, trend, weekly). Card jangan overflow-hidden-in tooltip.
+3. **Most Active Day card height**: default height = tinggi konten (bug: hover baru "benar" = re-layout saat hover) — grid row `alignItems:"flex-start"`, card hug content. Spacing judul → chart ditambah (diagram terlalu mepet title).
+4. Tooltip content opsional: tanggal + total + rincian per seri (gaya referensi DeepSeek).
+
 ## Handoff (pindah device)
 - Repo: https://github.com/Davnn1/paseo-usage-plugin.git (branch `main`).
 - Install di mesin baru: `git clone` → `npm install` → cek `pluginsEnabled` di `~/.paseo/config.json` daemon lokal → `paseo plugin install ./usage` **dari parent folder (path RELATIF — path absolut = silent no-op, pitfall terverifikasi)** → `paseo plugin ls` harus `running`, cek kolom ERROR.

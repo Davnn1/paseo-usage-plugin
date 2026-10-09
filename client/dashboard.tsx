@@ -1,5 +1,5 @@
 import type { PluginHostProps } from "@getpaseo/plugin/client";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import {
   dailyTokens,
@@ -21,6 +21,35 @@ const WEEKDAY_MON_FIRST = [1, 2, 3, 4, 5, 6, 0];
 
 const PALETTE_KEYS = ["accent", "statusSuccess", "statusWarning", "statusDanger", "surface2", "foregroundMuted"] as const;
 
+// ---------------------------------------------------------------------------
+// Global tooltip: one layer at the dashboard root, free-floating across cards.
+// ---------------------------------------------------------------------------
+
+interface TipData {
+  title: string;
+  total?: string;
+  rows: { label: string; value: string }[];
+}
+
+interface TipState {
+  key: string;
+  x: number;
+  y: number;
+  data: TipData;
+}
+
+interface TipAnchor {
+  measureInWindow?: (cb: (x: number, y: number, w: number, h: number) => void) => void;
+}
+
+interface TipController {
+  show: (key: string, anchor: TipAnchor | null, data: TipData) => void;
+  hide: (key: string) => void;
+  toggle: (key: string, anchor: TipAnchor | null, data: TipData) => void;
+}
+
+const TIP_WIDTH = 172;
+
 export function Dashboard({
   data,
   theme,
@@ -29,49 +58,119 @@ export function Dashboard({
   data: UsageDashboardOutput;
 } & PluginHostProps) {
   const compact = layout.compact;
-  // Independent hover state per chart (round 11: no cross-chart linking).
-  const [heatFocus, setHeatFocus] = useState<DailyPoint | null>(null);
-  const [trendFocus, setTrendFocus] = useState<DailyPoint | null>(null);
-  const focusLine = (focus: DailyPoint | null, hint: string) => (
-    <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11 }} numberOfLines={1}>
-      {focus
-        ? `${focus.date} · in ${formatTokens(focus.inputTokens)} · out ${formatTokens(focus.outputTokens)} · $${focus.costUsd.toFixed(2)} · ${focus.sessions} sessions`
-        : hint}
-    </Text>
+  const [tip, setTip] = useState<TipState | null>(null);
+  const [rootWidth, setRootWidth] = useState(0);
+
+  const controller: TipController = useMemo(
+    () => ({
+      show: (key, anchor, tipData) => {
+        if (anchor?.measureInWindow) {
+          anchor.measureInWindow((x, y, w, h) => {
+            setTip((current) =>
+              current && current.key === key ? current : { key, x: x + w / 2, y: y + h, data: tipData },
+            );
+          });
+        } else {
+          setTip((current) => (current && current.key === key ? current : { key, x: 0, y: 0, data: tipData }));
+        }
+      },
+      hide: (key) => setTip((current) => (current && current.key === key ? null : current)),
+      toggle: (key, anchor, tipData) => {
+        setTip((current) => {
+          if (current && current.key === key) return null;
+          return { key, x: 0, y: 0, data: tipData };
+        });
+        if (anchor?.measureInWindow) {
+          anchor.measureInWindow((x, y, w, h) => {
+            setTip((current) =>
+              current && current.key === key ? { ...current, x: x + w / 2, y: y + h } : current,
+            );
+          });
+        }
+      },
+    }),
+    [],
   );
 
+  const tipLeft =
+    tip === null ? 0 : Math.min(Math.max(4, tip.x - TIP_WIDTH / 2), Math.max(4, rootWidth - TIP_WIDTH - 4));
+
   return (
-    <View style={stylesGrid(compact)}>
+    <View style={stylesGrid(compact)} onLayout={(event) => setRootWidth(event.nativeEvent.layout.width)}>
       <View style={stylesCard(theme, compact)}>
         <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
           <Text style={stylesCardTitle(theme)}>OVERVIEW</Text>
           <Text style={{ color: theme.colors.foregroundMuted, fontSize: 10 }}>Last 365 days</Text>
         </View>
-        <Heatmap points={data.heatmapDaily} theme={theme} compact={compact} focus={heatFocus} onFocus={setHeatFocus} />
-        {focusLine(heatFocus, "Hover or press a day for details.")}
+        <Heatmap points={data.heatmapDaily} theme={theme} compact={compact} tips={controller} />
       </View>
 
       <View style={stylesCard(theme, compact)}>
         <Text style={stylesCardTitle(theme)}>MOST ACTIVE DAY</Text>
-        <MostActiveAndWeekly series={data.series} theme={theme} compact={compact} />
+        <MostActiveAndWeekly series={data.series} theme={theme} compact={compact} tips={controller} />
       </View>
 
       <View style={stylesCard(theme, compact)}>
         <Text style={stylesCardTitle(theme)}>MODEL USAGE OVER TIME</Text>
-        <TrendChart points={data.series.daily} theme={theme} compact={compact} focus={trendFocus} onFocus={setTrendFocus} />
-        {focusLine(trendFocus, "Hover or press a bar for details.")}
+        <TrendChart points={data.series.daily} theme={theme} compact={compact} tips={controller} />
       </View>
 
       <View style={stylesCard(theme, compact)}>
         <Text style={stylesCardTitle(theme)}>COST BY PROVIDER</Text>
         <CostByProvider data={data} theme={theme} compact={compact} />
       </View>
+
+      {tip ? (
+        <View
+          pointerEvents="none"
+          style={{
+            position: "absolute",
+            left: tipLeft,
+            top: tip.y + 10,
+            width: TIP_WIDTH,
+            backgroundColor: theme.colors.surface2,
+            borderRadius: 8,
+            borderWidth: 1,
+            borderColor: theme.colors.border,
+            padding: 8,
+            gap: 2,
+            zIndex: 100,
+          }}
+        >
+          <Text style={{ color: theme.colors.foreground, fontSize: 11, fontWeight: "700" as const }} numberOfLines={1}>
+            {tip.data.title}
+          </Text>
+          {tip.data.total ? (
+            <Text style={{ color: theme.colors.foreground, fontSize: 10, fontWeight: "600" as const }}>{tip.data.total}</Text>
+          ) : null}
+          {tip.data.rows.map((row) => (
+            <View key={row.label} style={{ flexDirection: "row", justifyContent: "space-between", gap: 8 }}>
+              <Text style={{ color: theme.colors.foregroundMuted, fontSize: 10 }}>{row.label}</Text>
+              <Text style={{ color: theme.colors.foreground, fontSize: 10, fontWeight: "600" as const }}>{row.value}</Text>
+            </View>
+          ))}
+        </View>
+      ) : null}
     </View>
   );
 }
 
+function dailyTip(point: DailyPoint): TipData {
+  return {
+    title: point.date,
+    total: `${formatTokens(dailyTokens(point))} tokens`,
+    rows: [
+      { label: "Input", value: formatTokens(point.inputTokens) },
+      { label: "Output", value: formatTokens(point.outputTokens) },
+      { label: "Cache Read", value: formatTokens(point.cacheReadTokens) },
+      { label: "Cost", value: `$${point.costUsd.toFixed(2)}` },
+      { label: "Sessions", value: String(point.sessions) },
+    ],
+  };
+}
+
 // ---------------------------------------------------------------------------
-// Shared style helpers (functions to keep theme access at call time)
+// Shared style helpers
 // ---------------------------------------------------------------------------
 
 function stylesGrid(compact: boolean) {
@@ -105,25 +204,24 @@ function stylesCardTitle(theme: PluginHostProps["theme"]) {
 }
 
 // ---------------------------------------------------------------------------
-// Heatmap: last 365 days, Monday-first columns, floating card near the cell.
+// Heatmap: fixed-size cells, Monday-first rows x week columns, anchored tips.
 // ---------------------------------------------------------------------------
 
 function Heatmap({
   points,
   theme,
   compact,
-  focus,
-  onFocus,
+  tips,
 }: {
   points: DailyPoint[];
   theme: PluginHostProps["theme"];
   compact: boolean;
-  focus: DailyPoint | null;
-  onFocus: (point: DailyPoint | null) => void;
+  tips: TipController;
 }) {
   const cell = compact ? 9 : 11;
   const gap = 2;
   const labelWidth = 24;
+  const cellRefs = useRef(new Map<string, View>());
 
   const { cells, weeks, monthLabels, activeDays, totalTokens, maxTokens, byDateKey } = useMemo(() => {
     const map = new Map(points.map((point) => [point.date, point]));
@@ -172,39 +270,11 @@ function Heatmap({
   for (const cellPoint of cells) {
     (grid[cellPoint.weekday] ?? (grid[cellPoint.weekday] = [])).push(cellPoint);
   }
-
-  const focusedCell = focus ? byDateKey.get(focus.date) : undefined;
-  const floating = focus && focusedCell ? { cell: focusedCell, point: focus } : null;
   const gridWidth = weeks * (cell + gap);
 
-  const cellAt = (cellPoint: (typeof cells)[number]) => {
-    const level = intensity(cellPoint.tokens);
-    const highlighted = focus?.date === cellPoint.date;
-    const cellView = (
-      <View
-        style={{
-          width: cell,
-          height: cell,
-          borderRadius: 2,
-          backgroundColor: theme.colors.statusSuccess,
-          opacity: level === 0 ? 0.12 : level,
-          borderWidth: highlighted ? 1.5 : 0,
-          borderColor: theme.colors.foreground,
-        }}
-      />
-    );
-    return cellPoint.point ? (
-      <Pressable
-        key={`${cellPoint.week}-${cellPoint.weekday}`}
-        onHoverIn={() => onFocus(cellPoint.point)}
-        onHoverOut={() => onFocus(null)}
-        onPress={() => onFocus(focus?.date === cellPoint.date ? null : cellPoint.point)}
-      >
-        {cellView}
-      </Pressable>
-    ) : (
-      <View key={`${cellPoint.week}-${cellPoint.weekday}`}>{cellView}</View>
-    );
+  const setCellRef = (date: string) => (node: View | null) => {
+    if (node) cellRefs.current.set(date, node);
+    else cellRefs.current.delete(date);
   };
 
   return (
@@ -252,37 +322,34 @@ function Heatmap({
                   {Array.from({ length: weeks }, (_, week) => {
                     const cellPoint = grid[weekday]?.[week];
                     if (!cellPoint) return <View key={week} style={{ width: cell, height: cell }} />;
-                    return cellAt(cellPoint);
+                    const level = intensity(cellPoint.tokens);
+                    const cellView = (
+                      <View
+                        style={{
+                          width: cell,
+                          height: cell,
+                          borderRadius: 2,
+                          backgroundColor: theme.colors.statusSuccess,
+                          opacity: level === 0 ? 0.12 : level,
+                        }}
+                      />
+                    );
+                    return cellPoint.point ? (
+                      <Pressable
+                        key={week}
+                        ref={setCellRef(cellPoint.date) as never}
+                        onHoverIn={() => tips.show(cellPoint.date, cellRefs.current.get(cellPoint.date) ?? null, dailyTip(cellPoint.point as DailyPoint))}
+                        onHoverOut={() => tips.hide(cellPoint.date)}
+                        onPress={() => tips.toggle(cellPoint.date, cellRefs.current.get(cellPoint.date) ?? null, dailyTip(cellPoint.point as DailyPoint))}
+                      >
+                        {cellView}
+                      </Pressable>
+                    ) : (
+                      <View key={week}>{cellView}</View>
+                    );
                   })}
                 </View>
               ))}
-              {floating ? (
-                <View
-                  style={{
-                    position: "absolute" as const,
-                    top: floating.cell.weekday * (cell + gap) + cell + 4,
-                    left: Math.min(floating.cell.week * (cell + gap), Math.max(0, gridWidth - 172)),
-                    width: 168,
-                    backgroundColor: theme.colors.surface2,
-                    borderRadius: 8,
-                    borderWidth: 1,
-                    borderColor: theme.colors.border,
-                    padding: 8,
-                    gap: 2,
-                    zIndex: 10,
-                  }}
-                >
-                  <Text style={{ color: theme.colors.foreground, fontSize: 11, fontWeight: "700" as const }}>
-                    {floating.cell.date}
-                  </Text>
-                  <Text style={{ color: theme.colors.foregroundMuted, fontSize: 10 }}>
-                    {`in ${formatTokens(floating.point.inputTokens)} · out ${formatTokens(floating.point.outputTokens)}`}
-                  </Text>
-                  <Text style={{ color: theme.colors.foregroundMuted, fontSize: 10 }}>
-                    {`$${floating.point.costUsd.toFixed(2)} · ${floating.point.sessions} sessions`}
-                  </Text>
-                </View>
-              ) : null}
             </View>
           </View>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginLeft: labelWidth + gap }}>
@@ -308,27 +375,27 @@ function Heatmap({
 }
 
 // ---------------------------------------------------------------------------
-// Most active day + weekly strip with crosshair and floating tooltip.
+// Most active day + weekly strip (constant height; tips via the global layer).
 // ---------------------------------------------------------------------------
 
 function MostActiveAndWeekly({
   series,
   theme,
   compact,
+  tips,
 }: {
   series: UsageDashboardOutput["series"];
   theme: PluginHostProps["theme"];
   compact: boolean;
+  tips: TipController;
 }) {
-  const [focusWeekday, setFocusWeekday] = useState<number | null>(null);
-  const [width, setWidth] = useState(0);
+  const barRefs = useRef(new Map<number, View>());
   const maxWeekly = Math.max(1, ...series.weekly.map((point) => point.tokens));
   const mad = series.mostActiveDay;
   const barHeight = compact ? 42 : 56;
-  const slotWidth = width > 0 ? width / 7 : 0;
 
   return (
-    <View style={{ gap: 10 }}>
+    <View style={{ gap: 10, marginTop: 2 }}>
       <View>
         {mad ? (
           <>
@@ -343,112 +410,80 @@ function MostActiveAndWeekly({
           <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>No usage in this period.</Text>
         )}
       </View>
-      <View
-        onLayout={(event) => setWidth(event.nativeEvent.layout.width)}
-        style={{ height: barHeight + (focusWeekday !== null ? 62 : 14) }}
-      >
-        <View style={{ flexDirection: "row", alignItems: "flex-end", gap: 6, height: barHeight }}>
-          {WEEKDAY_MON_FIRST.map((weekday) => {
-            const point: WeeklyPoint | undefined = series.weekly[weekday];
-            const ratio = point ? point.tokens / maxWeekly : 0;
-            const bar = (
-              <View
-                style={{
-                  width: "100%",
-                  height: Math.max(2, Math.round(ratio * barHeight)),
-                  borderRadius: 3,
-                  backgroundColor: theme.colors.accent,
-                  opacity: point && point.tokens > 0 ? 1 : 0.15,
-                }}
-              />
-            );
-            return (
-              <View key={weekday} style={{ flex: 1, alignItems: "center", gap: 3 }}>
-                {point && point.tokens > 0 ? (
-                  <Pressable
-                    onHoverIn={() => setFocusWeekday(weekday)}
-                    onHoverOut={() => setFocusWeekday((current) => (current === weekday ? null : current))}
-                    onPress={() => setFocusWeekday((current) => (current === weekday ? null : weekday))}
-                    style={{ width: "100%", alignItems: "center" }}
-                  >
-                    {bar}
-                  </Pressable>
-                ) : (
-                  bar
-                )}
-                <Text style={{ color: theme.colors.foregroundMuted, fontSize: 9 }}>
-                  {WEEKDAY_SHORT[weekday].slice(0, 2)}
-                </Text>
-              </View>
-            );
-          })}
-        </View>
-        {focusWeekday !== null && slotWidth > 0 ? (
-          <>
+      <View style={{ flexDirection: "row", alignItems: "flex-end", gap: 6, height: barHeight + 14 }}>
+        {WEEKDAY_MON_FIRST.map((weekday) => {
+          const point: WeeklyPoint | undefined = series.weekly[weekday];
+          const ratio = point ? point.tokens / maxWeekly : 0;
+          const bar = (
             <View
               style={{
-                position: "absolute" as const,
-                top: 0,
-                height: barHeight,
-                left: WEEKDAY_MON_FIRST.indexOf(focusWeekday) * slotWidth + slotWidth / 2,
-                width: 0,
-                gap: 2,
+                width: "100%",
+                height: Math.max(2, Math.round(ratio * barHeight)),
+                borderRadius: 3,
+                backgroundColor: theme.colors.accent,
+                opacity: point && point.tokens > 0 ? 1 : 0.15,
               }}
-            >
-              {Array.from({ length: Math.floor(barHeight / 5) }, (_, i) => (
-                <View key={i} style={{ width: 1, height: 3, backgroundColor: theme.colors.foregroundMuted }} />
-              ))}
-            </View>
-            <View
-              style={{
-                position: "absolute" as const,
-                top: barHeight + 14,
-                left: Math.min(
-                  Math.max(4, WEEKDAY_MON_FIRST.indexOf(focusWeekday) * slotWidth + slotWidth / 2 - 70),
-                  Math.max(4, width - 148),
-                ),
-                width: 140,
-                backgroundColor: theme.colors.surface2,
-                borderRadius: 8,
-                borderWidth: 1,
-                borderColor: theme.colors.border,
-                padding: 8,
-                gap: 2,
-              }}
-            >
-              <Text style={{ color: theme.colors.foreground, fontSize: 11, fontWeight: "700" as const }}>
-                {WEEKDAY_SHORT[focusWeekday]}
+            />
+          );
+          return (
+            <View key={weekday} style={{ flex: 1, alignItems: "center", gap: 3 }}>
+              {point && point.tokens > 0 ? (
+                <Pressable
+                  ref={((node: View | null) => {
+                    if (node) barRefs.current.set(weekday, node);
+                    else barRefs.current.delete(weekday);
+                  }) as never}
+                  onHoverIn={() =>
+                    tips.show(`week-${weekday}`, barRefs.current.get(weekday) ?? null, {
+                      title: WEEKDAY_SHORT[weekday],
+                      total: `${formatTokens(point.tokens)} tokens`,
+                      rows: [{ label: "Cost", value: `$${point.costUsd.toFixed(2)}` }],
+                    })
+                  }
+                  onHoverOut={() => tips.hide(`week-${weekday}`)}
+                  onPress={() =>
+                    tips.toggle(`week-${weekday}`, barRefs.current.get(weekday) ?? null, {
+                      title: WEEKDAY_SHORT[weekday],
+                      total: `${formatTokens(point.tokens)} tokens`,
+                      rows: [{ label: "Cost", value: `$${point.costUsd.toFixed(2)}` }],
+                    })
+                  }
+                  style={{ width: "100%", alignItems: "center" }}
+                >
+                  {bar}
+                </Pressable>
+              ) : (
+                bar
+              )}
+              <Text style={{ color: theme.colors.foregroundMuted, fontSize: 9 }}>
+                {WEEKDAY_SHORT[weekday].slice(0, 2)}
               </Text>
-              <Text style={{ color: theme.colors.foregroundMuted, fontSize: 10 }}>
-                {`${formatTokens(series.weekly[focusWeekday]?.tokens ?? 0)} tokens · $${(series.weekly[focusWeekday]?.costUsd ?? 0).toFixed(2)}`}
-              </Text>
             </View>
-          </>
-        ) : null}
+          );
+        })}
       </View>
     </View>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Trend: full-width flex bars (no scroll), dashed crosshair, floating tooltip.
+// Trend: explicit pixel geometry, dashed crosshair, global tooltip.
 // ---------------------------------------------------------------------------
 
 function TrendChart({
   points,
   theme,
   compact,
-  focus,
-  onFocus,
+  tips,
 }: {
   points: DailyPoint[];
   theme: PluginHostProps["theme"];
   compact: boolean;
-  focus: DailyPoint | null;
-  onFocus: (point: DailyPoint | null) => void;
+  tips: TipController;
 }) {
   const chartHeight = compact ? 64 : 84;
   const [width, setWidth] = useState(0);
+  const barRefs = useRef(new Map<string, View>());
 
   const { maxTokens, maxCost, active } = useMemo(() => {
     let maxTokens = 0;
@@ -469,9 +504,6 @@ function TrendChart({
 
   const count = points.length;
   const gap = 1;
-  // Explicit pixel geometry: fills the container when few segments, clamps to
-  // a readable minimum when many (All period scrolls instead of shrinking).
-  // No flex:1 bars - explicit widths render identically on every host.
   const distributed = width > 0 ? width / count : 8;
   const barWidth = Math.min(28, Math.max(8, distributed));
   const scroll = width > 0 && count * (barWidth + gap) > width;
@@ -479,16 +511,13 @@ function TrendChart({
   const slotWidth = scroll ? barWidth + gap : width > 0 ? width / count : barWidth + gap;
   const exactBarWidth = scroll ? barWidth : Math.max(1, slotWidth - gap);
 
-  const focusIndex = focus ? points.findIndex((point) => point.date === focus.date) : -1;
-  const focused = focusIndex >= 0 ? points[focusIndex] : null;
-
-  const renderBar = (point: DailyPoint, exactWidth: number) => {
+  const renderBar = (point: DailyPoint) => {
     const inRatio = point.inputTokens / maxTokens;
     const outRatio = point.outputTokens / maxTokens;
     const costRatio = point.costUsd / maxCost;
     const hasActivity = point.inputTokens + point.outputTokens > 0;
     const column = (
-      <View style={{ width: exactWidth, height: chartHeight, justifyContent: "flex-end" }}>
+      <View style={{ width: exactBarWidth, height: chartHeight, justifyContent: "flex-end" }}>
         <View
           style={{
             position: "absolute" as const,
@@ -519,12 +548,17 @@ function TrendChart({
         />
       </View>
     );
+    const key = `trend-${point.date}`;
     return hasActivity ? (
       <Pressable
         key={point.date}
-        onHoverIn={() => onFocus(point)}
-        onHoverOut={() => onFocus(null)}
-        onPress={() => onFocus(focused?.date === point.date ? null : point)}
+        ref={((node: View | null) => {
+          if (node) barRefs.current.set(key, node);
+          else barRefs.current.delete(key);
+        }) as never}
+        onHoverIn={() => tips.show(key, barRefs.current.get(key) ?? null, dailyTip(point))}
+        onHoverOut={() => tips.hide(key)}
+        onPress={() => tips.toggle(key, barRefs.current.get(key) ?? null, dailyTip(point))}
       >
         {column}
       </Pressable>
@@ -542,56 +576,10 @@ function TrendChart({
         width: Math.max(1, contentWidth),
       }}
     >
-      {points.map((point) => renderBar(point, exactBarWidth))}
-      {focused && focusIndex >= 0 ? (
-        <>
-          <View
-            style={{
-              position: "absolute" as const,
-              top: 0,
-              height: chartHeight,
-              left: focusIndex * slotWidth + slotWidth / 2,
-              width: 0,
-              gap: 2,
-            }}
-          >
-            {Array.from({ length: Math.floor(chartHeight / 5) }, (_, i) => (
-              <View key={i} style={{ width: 1, height: 3, backgroundColor: theme.colors.foregroundMuted }} />
-            ))}
-          </View>
-          <View
-            style={{
-              position: "absolute" as const,
-              top: 2,
-              left: Math.min(
-                Math.max(4, focusIndex * slotWidth + slotWidth / 2 - 75),
-                Math.max(4, contentWidth - 154),
-              ),
-              width: 150,
-              backgroundColor: theme.colors.surface2,
-              borderRadius: 8,
-              borderWidth: 1,
-              borderColor: theme.colors.border,
-              padding: 8,
-              gap: 2,
-              zIndex: 10,
-            }}
-          >
-            <Text style={{ color: theme.colors.foreground, fontSize: 11, fontWeight: "700" as const }}>{focused.date}</Text>
-            <Text style={{ color: theme.colors.foregroundMuted, fontSize: 10 }}>
-              {`in ${formatTokens(focused.inputTokens)} · out ${formatTokens(focused.outputTokens)}`}
-            </Text>
-            <Text style={{ color: theme.colors.foregroundMuted, fontSize: 10 }}>
-              {`$${focused.costUsd.toFixed(2)} · ${focused.sessions} sessions`}
-            </Text>
-          </View>
-        </>
-      ) : null}
+      {points.map((point) => renderBar(point))}
     </View>
   );
 
-  // Wait for the container measurement before drawing - explicit pixel
-  // geometry needs a real width, and this avoids a collapsed first paint.
   if (width <= 0) {
     return (
       <View onLayout={(event) => setWidth(event.nativeEvent.layout.width)} style={{ height: chartHeight }} />
