@@ -146,13 +146,16 @@ export function Dashboard({
       </View>
 
       <View style={stylesCard(theme, compact)}>
-        <Text style={stylesCardTitle(theme)}>ACTIVITY</Text>
+        <Text style={stylesCardTitle(theme)}>WEEKLY ACTIVITY</Text>
         <MostActiveAndWeekly series={data.series} theme={theme} compact={compact} tips={controller} />
-        <View style={{ height: 1, backgroundColor: theme.colors.border, marginVertical: 4 }} />
+      </View>
+
+      <View style={stylesCard(theme, compact)}>
+        <Text style={stylesCardTitle(theme)}>MODEL USAGE OVER TIME</Text>
         <TrendChart points={data.series.daily} theme={theme} compact={compact} tips={controller} />
       </View>
 
-      <View style={[stylesCard(theme, compact), { flexBasis: compact ? ("100%" as const) : ("100%" as const) }]}>
+      <View style={stylesCard(theme, compact)}>
         <Text style={stylesCardTitle(theme)}>COST BY PROVIDER</Text>
         <CostByProvider data={data} theme={theme} compact={compact} />
       </View>
@@ -209,24 +212,7 @@ interface TipRow {
   dot?: PaletteKey;
 }
 
-function weeklyTip(weekday: number, point: WeeklyPoint): TipData {
-  return {
-    title: `${WEEKDAY_SHORT[weekday]} (cumulative)`,
-    total: `${formatTokens(point.tokens)} tokens`,
-    rows: [
-      ...point.models.slice(0, 6).map((model) => ({
-        label: model.model,
-        value: formatTokens(model.tokens),
-        dot: modelColorIndex(model.model),
-      })),
-      { label: "Input", value: formatTokens(point.inputTokens) },
-      { label: "Output", value: formatTokens(point.outputTokens) },
-      { label: "Cost", value: `$${point.costUsd.toFixed(2)}` },
-    ],
-  };
-}
-
-function dailyTip(point: DailyPoint): TipData {
+function weeklyTip(weekday: number, point: WeeklyPoint, peakDate: string | null): TipData {
   const rows: TipRow[] = point.models.slice(0, 6).map((model) => ({
     label: model.model,
     value: formatTokens(model.tokens),
@@ -235,13 +221,26 @@ function dailyTip(point: DailyPoint): TipData {
   rows.push(
     { label: "Input", value: formatTokens(point.inputTokens) },
     { label: "Output", value: formatTokens(point.outputTokens) },
-    { label: "Cache Read", value: formatTokens(point.cacheReadTokens) },
     { label: "Cost", value: `$${point.costUsd.toFixed(2)}` },
   );
   return {
-    title: point.date,
-    total: `${formatTokens(dailyTokens(point))} tokens · ${point.sessions} sessions`,
+    title: peakDate ? `${WEEKDAY_SHORT[weekday]} · peak ${peakDate}` : WEEKDAY_SHORT[weekday],
+    total: `${formatTokens(point.tokens)} tokens (cumulative)`,
     rows,
+  };
+}
+
+function dailyTip(point: DailyPoint): TipData {
+  return {
+    title: point.date,
+    total: `${formatTokens(dailyTokens(point))} tokens`,
+    rows: [
+      { label: "Input", value: formatTokens(point.inputTokens) },
+      { label: "Output", value: formatTokens(point.outputTokens) },
+      { label: "Cache Read", value: formatTokens(point.cacheReadTokens) },
+      { label: "Cost", value: `$${point.costUsd.toFixed(2)}` },
+      { label: "Sessions", value: String(point.sessions) },
+    ],
   };
 }
 
@@ -522,13 +521,23 @@ function MostActiveAndWeekly({
                   }) as never}
                   onHoverIn={() => {
                     setCross(weekday);
-                    tips.show(`week-${weekday}`, barRefs.current.get(weekday) ?? null, weeklyTip(weekday, point));
+                    tips.show(
+                      `week-${weekday}`,
+                      barRefs.current.get(weekday) ?? null,
+                      weeklyTip(weekday, point, mad && mad.weekday === weekday ? mad.date : null),
+                    );
                   }}
                   onHoverOut={() => {
                     setCross((current) => (current === weekday ? null : current));
                     tips.hide(`week-${weekday}`);
                   }}
-                  onPress={() => tips.toggle(`week-${weekday}`, barRefs.current.get(weekday) ?? null, weeklyTip(weekday, point))}
+                  onPress={() =>
+                    tips.toggle(
+                      `week-${weekday}`,
+                      barRefs.current.get(weekday) ?? null,
+                      weeklyTip(weekday, point, mad && mad.weekday === weekday ? mad.date : null),
+                    )
+                  }
                   style={{ width: "100%", alignItems: "center" }}
                 >
                   {bar}
