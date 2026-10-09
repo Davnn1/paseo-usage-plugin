@@ -12,6 +12,13 @@ import {
 
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
+/** Stable palette slot for a model name so its dot color never changes. */
+function modelColorIndex(model: string): PaletteKey {
+  let hash = 0;
+  for (let i = 0; i < model.length; i += 1) hash = (hash * 31 + model.charCodeAt(i)) | 0;
+  return PALETTE_KEYS[Math.abs(hash) % PALETTE_KEYS.length];
+}
+
 function formatTokens(value: number): string {
   if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(1)}B`;
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
@@ -32,7 +39,7 @@ const PALETTE_KEYS = ["accent", "statusSuccess", "statusWarning", "statusDanger"
 interface TipData {
   title: string;
   total?: string;
-  rows: { label: string; value: string }[];
+  rows: TipRow[];
 }
 
 interface TipState {
@@ -54,6 +61,11 @@ interface TipController {
 
 const TIP_WIDTH = 172;
 
+function tipRowCount(tip: TipState | null): number {
+  if (!tip) return 0;
+  return (tip.data.total ? 1 : 0) + tip.data.rows.length;
+}
+
 export function Dashboard({
   data,
   theme,
@@ -66,6 +78,7 @@ export function Dashboard({
   const tipRef = useRef<TipState | null>(null);
   tipRef.current = tip;
   const [rootWidth, setRootWidth] = useState(0);
+  const [rootHeight, setRootHeight] = useState(0);
   const rootRef = useRef<View | null>(null);
   // measureInWindow returns WINDOW coordinates, but the tooltip layer renders
   // inside this container - position both and render the delta.
@@ -108,6 +121,10 @@ export function Dashboard({
 
   const tipLeft =
     tip === null ? 0 : Math.min(Math.max(4, tip.x - TIP_WIDTH / 2), Math.max(4, rootWidth - TIP_WIDTH - 4));
+  // Flip the tooltip above the anchor when it would cross the dashboard's
+  // bottom edge, so it stays whole even near the last card.
+  const TIP_HEIGHT_EST = 30 + tipRowCount(tip) * 14;
+  const tipLift = tip === null ? 0 : tip.y + 10 + TIP_HEIGHT_EST > rootHeight ? -(TIP_HEIGHT_EST + 20) : 0;
 
   return (
     <View
@@ -115,7 +132,10 @@ export function Dashboard({
         rootRef.current = node;
       }}
       style={stylesGrid(compact)}
-      onLayout={(event) => setRootWidth(event.nativeEvent.layout.width)}
+      onLayout={(event) => {
+        setRootWidth(event.nativeEvent.layout.width);
+        setRootHeight(event.nativeEvent.layout.height);
+      }}
     >
       <View style={stylesCard(theme, compact)}>
         <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
@@ -126,16 +146,13 @@ export function Dashboard({
       </View>
 
       <View style={stylesCard(theme, compact)}>
-        <Text style={stylesCardTitle(theme)}>MOST ACTIVE DAY</Text>
+        <Text style={stylesCardTitle(theme)}>ACTIVITY</Text>
         <MostActiveAndWeekly series={data.series} theme={theme} compact={compact} tips={controller} />
-      </View>
-
-      <View style={stylesCard(theme, compact)}>
-        <Text style={stylesCardTitle(theme)}>MODEL USAGE OVER TIME</Text>
+        <View style={{ height: 1, backgroundColor: theme.colors.border, marginVertical: 4 }} />
         <TrendChart points={data.series.daily} theme={theme} compact={compact} tips={controller} />
       </View>
 
-      <View style={stylesCard(theme, compact)}>
+      <View style={[stylesCard(theme, compact), { flexBasis: compact ? ("100%" as const) : ("100%" as const) }]}>
         <Text style={stylesCardTitle(theme)}>COST BY PROVIDER</Text>
         <CostByProvider data={data} theme={theme} compact={compact} />
       </View>
@@ -146,7 +163,7 @@ export function Dashboard({
           style={{
             position: "absolute",
             left: tipLeft,
-            top: tip.y + 10,
+            top: tip.y + 10 + tipLift,
             width: TIP_WIDTH,
             backgroundColor: theme.colors.surface2,
             borderRadius: 8,
@@ -154,7 +171,8 @@ export function Dashboard({
             borderColor: theme.colors.border,
             padding: 8,
             gap: 2,
-            zIndex: 100,
+            // highest sibling zIndex and rendered last so cards never cover it
+            zIndex: 1000,
           }}
         >
           <Text style={{ color: theme.colors.foreground, fontSize: 11, fontWeight: "700" as const }} numberOfLines={1}>
@@ -164,8 +182,15 @@ export function Dashboard({
             <Text style={{ color: theme.colors.foreground, fontSize: 10, fontWeight: "600" as const }}>{tip.data.total}</Text>
           ) : null}
           {tip.data.rows.map((row) => (
-            <View key={row.label} style={{ flexDirection: "row", justifyContent: "space-between", gap: 8 }}>
-              <Text style={{ color: theme.colors.foregroundMuted, fontSize: 10 }}>{row.label}</Text>
+            <View key={row.label} style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 4, flexShrink: 1 }}>
+                {row.dot ? (
+                  <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: theme.colors[row.dot] }} />
+                ) : null}
+                <Text style={{ color: theme.colors.foregroundMuted, fontSize: 10 }} numberOfLines={1}>
+                  {row.label}
+                </Text>
+              </View>
               <Text style={{ color: theme.colors.foreground, fontSize: 10, fontWeight: "600" as const }}>{row.value}</Text>
             </View>
           ))}
@@ -175,17 +200,48 @@ export function Dashboard({
   );
 }
 
-function dailyTip(point: DailyPoint): TipData {
+type PaletteKey = (typeof PALETTE_KEYS)[number];
+
+interface TipRow {
+  label: string;
+  value: string;
+  /** Optional stable palette key for a per-model dot. */
+  dot?: PaletteKey;
+}
+
+function weeklyTip(weekday: number, point: WeeklyPoint): TipData {
   return {
-    title: point.date,
-    total: `${formatTokens(dailyTokens(point))} tokens`,
+    title: `${WEEKDAY_SHORT[weekday]} (cumulative)`,
+    total: `${formatTokens(point.tokens)} tokens`,
     rows: [
+      ...point.models.slice(0, 6).map((model) => ({
+        label: model.model,
+        value: formatTokens(model.tokens),
+        dot: modelColorIndex(model.model),
+      })),
       { label: "Input", value: formatTokens(point.inputTokens) },
       { label: "Output", value: formatTokens(point.outputTokens) },
-      { label: "Cache Read", value: formatTokens(point.cacheReadTokens) },
       { label: "Cost", value: `$${point.costUsd.toFixed(2)}` },
-      { label: "Sessions", value: String(point.sessions) },
     ],
+  };
+}
+
+function dailyTip(point: DailyPoint): TipData {
+  const rows: TipRow[] = point.models.slice(0, 6).map((model) => ({
+    label: model.model,
+    value: formatTokens(model.tokens),
+    dot: modelColorIndex(model.model),
+  }));
+  rows.push(
+    { label: "Input", value: formatTokens(point.inputTokens) },
+    { label: "Output", value: formatTokens(point.outputTokens) },
+    { label: "Cache Read", value: formatTokens(point.cacheReadTokens) },
+    { label: "Cost", value: `$${point.costUsd.toFixed(2)}` },
+  );
+  return {
+    title: point.date,
+    total: `${formatTokens(dailyTokens(point))} tokens · ${point.sessions} sessions`,
+    rows,
   };
 }
 
@@ -448,16 +504,13 @@ function MostActiveAndWeekly({
         {WEEKDAY_MON_FIRST.map((weekday) => {
           const point: WeeklyPoint | undefined = series.weekly[weekday];
           const ratio = point ? point.tokens / maxWeekly : 0;
+          const inH = point ? Math.round((point.inputTokens / maxWeekly) * barHeight) : 0;
+          const outH = point ? Math.max(0, Math.round(ratio * barHeight) - inH) : 0;
           const bar = (
-            <View
-              style={{
-                width: "100%",
-                height: Math.max(2, Math.round(ratio * barHeight)),
-                borderRadius: 3,
-                backgroundColor: theme.colors.accent,
-                opacity: point && point.tokens > 0 ? 1 : 0.15,
-              }}
-            />
+            <View style={{ width: "100%", opacity: point && point.tokens > 0 ? 1 : 0.15, gap: 0 }}>
+              <View style={{ height: Math.max(2, inH), borderTopLeftRadius: 3, borderTopRightRadius: 3, backgroundColor: theme.colors.statusSuccess }} />
+              <View style={{ height: outH, backgroundColor: theme.colors.accent }} />
+            </View>
           );
           return (
             <View key={weekday} style={{ flex: 1, alignItems: "center", gap: 3 }}>
@@ -469,23 +522,13 @@ function MostActiveAndWeekly({
                   }) as never}
                   onHoverIn={() => {
                     setCross(weekday);
-                    tips.show(`week-${weekday}`, barRefs.current.get(weekday) ?? null, {
-                      title: WEEKDAY_SHORT[weekday],
-                      total: `${formatTokens(point.tokens)} tokens`,
-                      rows: [{ label: "Cost", value: `$${point.costUsd.toFixed(2)}` }],
-                    });
+                    tips.show(`week-${weekday}`, barRefs.current.get(weekday) ?? null, weeklyTip(weekday, point));
                   }}
                   onHoverOut={() => {
                     setCross((current) => (current === weekday ? null : current));
                     tips.hide(`week-${weekday}`);
                   }}
-                  onPress={() =>
-                    tips.toggle(`week-${weekday}`, barRefs.current.get(weekday) ?? null, {
-                      title: WEEKDAY_SHORT[weekday],
-                      total: `${formatTokens(point.tokens)} tokens`,
-                      rows: [{ label: "Cost", value: `$${point.costUsd.toFixed(2)}` }],
-                    })
-                  }
+                  onPress={() => tips.toggle(`week-${weekday}`, barRefs.current.get(weekday) ?? null, weeklyTip(weekday, point))}
                   style={{ width: "100%", alignItems: "center" }}
                 >
                   {bar}
@@ -587,17 +630,17 @@ function TrendChart({
         <View
           style={{
             height: Math.max(0, Math.round(inRatio * chartHeight)),
-            backgroundColor: theme.colors.accent,
+            backgroundColor: theme.colors.statusSuccess,
             opacity: point.inputTokens > 0 ? 0.9 : 0,
-            borderTopLeftRadius: 1,
-            borderTopRightRadius: 1,
           }}
         />
         <View
           style={{
             height: Math.max(0, Math.round(outRatio * chartHeight)),
-            backgroundColor: theme.colors.statusSuccess,
+            backgroundColor: theme.colors.accent,
             opacity: point.outputTokens > 0 ? 0.9 : 0,
+            borderTopLeftRadius: 1,
+            borderTopRightRadius: 1,
           }}
         />
       </View>
@@ -675,8 +718,8 @@ function TrendChart({
         )}
       </View>
       <View style={{ flexDirection: "row", gap: 12 }}>
-        <Legend color={theme.colors.accent} label="Input" theme={theme} />
-        <Legend color={theme.colors.statusSuccess} label="Output" theme={theme} />
+        <Legend color={theme.colors.statusSuccess} label="Input" theme={theme} />
+        <Legend color={theme.colors.accent} label="Output" theme={theme} />
         <Legend color={theme.colors.statusWarning} label="Cost" theme={theme} />
       </View>
     </View>

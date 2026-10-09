@@ -110,22 +110,45 @@ export const usageRefreshRpc = defineRpc({
 // Dashboard series
 // ---------------------------------------------------------------------------
 
+export const modelTokenSchema = z.object({
+  model: z.string(),
+  tokens: z.number(),
+});
+export type ModelTokens = z.infer<typeof modelTokenSchema>;
+
 export const dailyPointSchema = z.object({
-  /** YYYY-MM-DD in UTC. */
+  /** YYYY-MM-DD local day key. */
   date: z.string(),
   inputTokens: z.number(),
   outputTokens: z.number(),
   cacheReadTokens: z.number(),
   costUsd: z.number(),
   sessions: z.number(),
+  /** Per-model token breakdown, top 8 plus an "other" bucket, descending. */
+  models: z.array(modelTokenSchema),
 });
 export type DailyPoint = z.infer<typeof dailyPointSchema>;
 
+const TOP_MODELS = 8;
+
+/** Collapse a model->tokens map into a sorted top-N plus "other" list. */
+export function topModels(byModel: Map<string, number>): ModelTokens[] {
+  const sorted = [...byModel.entries()].sort((a, b) => b[1] - a[1]);
+  const top = sorted.slice(0, TOP_MODELS).map(([model, tokens]) => ({ model, tokens }));
+  const rest = sorted.slice(TOP_MODELS).reduce((sum, [, tokens]) => sum + tokens, 0);
+  if (rest > 0) top.push({ model: "other", tokens: rest });
+  return top;
+}
+
 export const weeklyPointSchema = z.object({
-  /** 0 = Sunday … 6 = Saturday (Date.getUTCDay). */
+  /** 0 = Sunday … 6 = Saturday (local weekday). */
   weekday: z.number().int().min(0).max(6),
   tokens: z.number(),
+  inputTokens: z.number(),
+  outputTokens: z.number(),
   costUsd: z.number(),
+  /** Per-model cumulative breakdown for this weekday, top 8 + other. */
+  models: z.array(modelTokenSchema),
 });
 export type WeeklyPoint = z.infer<typeof weeklyPointSchema>;
 
@@ -293,14 +316,14 @@ export function dailyTokens(point: Pick<DailyPoint, "inputTokens" | "outputToken
  * otherwise the window ends at nowMs. All dates UTC.
  */
 export function bucketDaily(rows: UsageRow[], windowDays: number | null, nowMs: number, endMs?: number): DailyPoint[] {
-  const byDay = new Map<string, DailyPoint>();
+  const byDay = new Map<string, DailyPoint & { byModel: Map<string, number> }>();
   let earliest = Number.POSITIVE_INFINITY;
   for (const row of rows) {
     const key = localDateKey(row.timestampMs);
     if (row.timestampMs < earliest) earliest = row.timestampMs;
     let point = byDay.get(key);
     if (!point) {
-      point = { date: key, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, costUsd: 0, sessions: 0 };
+      point = { date: key, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, costUsd: 0, sessions: 0, models: [], byModel: new Map() };
       byDay.set(key, point);
     }
     point.inputTokens += row.inputTokens;
@@ -308,6 +331,7 @@ export function bucketDaily(rows: UsageRow[], windowDays: number | null, nowMs: 
     point.cacheReadTokens += row.cacheReadTokens;
     point.costUsd += row.costUsd;
     point.sessions += 1;
+    point.byModel.set(row.model, (point.byModel.get(row.model) ?? 0) + row.inputTokens + row.outputTokens);
   }
 
   const last = endMs ?? nowMs;
@@ -322,8 +346,8 @@ export function bucketDaily(rows: UsageRow[], windowDays: number | null, nowMs: 
     const point = byDay.get(key);
     result.push(
       point
-        ? { ...point, costUsd: Math.round(point.costUsd * 100) / 100 }
-        : { date: key, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, costUsd: 0, sessions: 0 },
+        ? { ...point, costUsd: Math.round(point.costUsd * 100) / 100, models: topModels(point.byModel) }
+        : { date: key, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, costUsd: 0, sessions: 0, models: [] },
     );
   }
   return result;
@@ -331,14 +355,30 @@ export function bucketDaily(rows: UsageRow[], windowDays: number | null, nowMs: 
 
 /** Aggregate daily points into 7 weekday slots (0=Sun … 6=Sat). */
 export function bucketWeekly(daily: DailyPoint[]): WeeklyPoint[] {
-  const slots: WeeklyPoint[] = Array.from({ length: 7 }, (_, weekday) => ({ weekday, tokens: 0, costUsd: 0 }));
+  const slots: (WeeklyPoint & { byModel: Map<string, number> })[] = Array.from({ length: 7 }, (_, weekday) => ({
+    weekday,
+    tokens: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    costUsd: 0,
+    models: [],
+    byModel: new Map(),
+  }));
   for (const point of daily) {
     const weekday = localWeekday(Date.parse(`${point.date}T12:00:00Z`));
     slots[weekday].tokens += dailyTokens(point);
+    slots[weekday].inputTokens += point.inputTokens;
+    slots[weekday].outputTokens += point.outputTokens;
     slots[weekday].costUsd += point.costUsd;
+    for (const model of point.models) {
+      slots[weekday].byModel.set(model.model, (slots[weekday].byModel.get(model.model) ?? 0) + model.tokens);
+    }
   }
-  for (const slot of slots) slot.costUsd = Math.round(slot.costUsd * 100) / 100;
-  return slots;
+  for (const slot of slots) {
+    slot.costUsd = Math.round(slot.costUsd * 100) / 100;
+    slot.models = topModels(slot.byModel);
+  }
+  return slots.map(({ byModel: _byModel, ...slot }) => slot);
 }
 
 /** Highest-token day, or null when the period has no usage. */

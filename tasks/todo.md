@@ -152,6 +152,12 @@ Strategi: cek dulu jalur TANPA proxy — wire protocol agy bawa token (inputToke
 3. **Most Active Day card height**: default height = tinggi konten (bug: hover baru "benar" = re-layout saat hover) — grid row `alignItems:"flex-start"`, card hug content. Spacing judul → chart ditambah (diagram terlalu mepet title).
 4. Tooltip content opsional: tanggal + total + rincian per seri (gaya referensi DeepSeek).
 
+## 15. Dashboard restructure (review user 2026-10-09)
+1. **Stack bar bottom-up series order** (berlaku di trend & weekly): hijau (Input) di BAWAH, Output di atasnya, Cost di puncak — konsisten kedua chart, jangan tergantung urutan data.
+2. **Tooltip topmost**: masih kepotong/tertutup komponen lain — pastikan layer tooltip render paling atas (zIndex/urutan render root, hindari stacking context card), uji overlap dengan card sekitarnya.
+3. **Gabung "Model Usage Over Time" ke kartu "Most Active Day"** jadi satu kartu (weekly strip + trend chart). Ganti title kartu (mis. "ACTIVITY" / "USAGE OVER TIME") — "Most Active Day" sudah tidak mewakili isi.
+4. **Hover tooltip = breakdown PER MODEL** (gaya gambar referensi user): header tanggal + total, lalu baris per model dengan dot warna konsisten (`gemini-3.8-flash-high: 58.5M`, dst). Data baru server: `series.daily[]` extend `models[] {model, tokens}` per hari (top N model + "other" kalau perlu) — atau RPC terpisah kalau lebih rapi. Tetap tampilkan input/output/cost ringkas.
+
 ## Handoff (pindah device)
 - Repo: https://github.com/Davnn1/paseo-usage-plugin.git (branch `main`).
 - Install di mesin baru: `git clone` → `npm install` → cek `pluginsEnabled` di `~/.paseo/config.json` daemon lokal → `paseo plugin install ./usage` **dari parent folder (path RELATIF — path absolut = silent no-op, pitfall terverifikasi)** → `paseo plugin ls` harus `running`, cek kolom ERROR.

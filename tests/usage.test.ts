@@ -282,9 +282,9 @@ test("bucketDaily sums same-day rows and handles empty input", () => {
   assert.equal(daily[0].inputTokens, 110); // default row carries 100 + explicit 10
   assert.equal(daily[0].costUsd, 0.63); // 0.5 default + 0.125 rounded
   assert.deepEqual(bucketDaily([], 3, NOW_DAY), [
-    { date: "2026-10-06", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, costUsd: 0, sessions: 0 },
-    { date: "2026-10-07", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, costUsd: 0, sessions: 0 },
-    { date: "2026-10-08", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, costUsd: 0, sessions: 0 },
+    { date: "2026-10-06", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, costUsd: 0, sessions: 0, models: [] },
+    { date: "2026-10-07", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, costUsd: 0, sessions: 0, models: [] },
+    { date: "2026-10-08", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, costUsd: 0, sessions: 0, models: [] },
   ]);
 });
 
@@ -1046,4 +1046,35 @@ test("sum of daily points equals totals for every period (calendar alignment)", 
       assert.ok(summary.totals.sessions === 0 || last >= first, period);
     }
   }
+});
+
+test("daily and weekly bucketing produce per-model breakdowns (top 8 + other)", () => {
+  const now = Date.UTC(2026, 9, 9, 12, 0, 0);
+  const rows: UsageRow[] = [];
+  // 10 models on one day: 9 distinct + two rows on the biggest
+  for (let i = 0; i < 9; i += 1) {
+    rows.push(row({ timestampMs: Date.UTC(2026, 9, 8, 10, 0, 0), model: `model-${i}`, inputTokens: (i + 1) * 100, outputTokens: 0, provider: "p" }));
+  }
+  rows.push(row({ timestampMs: Date.UTC(2026, 9, 8, 11, 0, 0), model: "model-8", inputTokens: 10_000, outputTokens: 0, provider: "p" }));
+  rows.push(row({ timestampMs: Date.UTC(2026, 9, 5, 10, 0, 0), model: "model-0", inputTokens: 50, outputTokens: 30, provider: "p" }));
+  const daily = bucketDaily(rows, null, now);
+  const day = daily.find((point) => point.date === "2026-10-08");
+  assert.ok(day);
+  assert.equal(day.models.length, 9); // top 8 + other
+  assert.equal(day.models[0].model, "model-8");
+  assert.equal(day.models[0].tokens, 10_900); // 900 + 10000 on the same model
+  const other = day.models[day.models.length - 1];
+  assert.equal(other.model, "other");
+  assert.equal(other.tokens, 100); // model-0 falls past the top 8
+  // descending order
+  for (let i = 1; i < day.models.length; i += 1) {
+    assert.ok(day.models[i - 1].tokens >= day.models[i].tokens);
+  }
+  // weekly aggregates the same model split cumulatively per weekday
+  const weekly = bucketWeekly(daily);
+  const thursday = weekly[4]; // 2026-10-08 is a Thursday
+  assert.equal(thursday.inputTokens, 10_900 + 3_600);
+  assert.equal(thursday.models[0].model, "model-8");
+  const monday = weekly[1]; // 2026-10-05
+  assert.equal(monday.models[0].tokens, 80);
 });
