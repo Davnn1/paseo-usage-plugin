@@ -70,18 +70,6 @@ interface MetricRow {
  * bottom sheet on compact hosts. Data is read through the getter at render
  * time, so refresh only needs registration.update() for label/title.
  */
-function formatCompactTokens(value: number): string {
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
-  return String(Math.round(value));
-}
-
-function formatCompactWindow(value: number): string {
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(1).replace(/\.0$/, "")}K`;
-  return String(value);
-}
-
 function PillDetailCard({ data }: { data: () => PillData | undefined }) {
   return function Content({ theme, layout }: PluginButtonContentProps) {
     const current = data();
@@ -97,16 +85,6 @@ function PillDetailCard({ data }: { data: () => PillData | undefined }) {
         { id: "cache-read", label: "Cache Read", value: formatTokens(session.cacheReadTokens), dotColor: theme.colors.border },
         { id: "cache-write", label: "Cache Write", value: formatTokens(session.cacheWriteTokens), dotColor: theme.colors.border, dotOpacity: 0.6 },
         { id: "cache-hit", label: "Cache Hit", value: `${(session.cacheHitRatio * 100).toFixed(1)}%`, dotColor: theme.colors.statusSuccess, progressRatio: session.cacheHitRatio },
-        ...(session.ctx
-          ? [
-              {
-                id: "context",
-                label: "Context",
-                value: `${Math.round(session.ctx.pct)}% (${formatCompactTokens(session.ctx.usedTokens)}/${formatCompactWindow(session.ctx.windowTokens)})`,
-                dotColor: theme.colors.accent,
-              },
-            ]
-          : []),
         { id: "cost", label: "Cost", value: `$${session.costUsd.toFixed(2)}`, dotColor: theme.colors.statusWarning },
       ];
     } else if (current?.daily) {

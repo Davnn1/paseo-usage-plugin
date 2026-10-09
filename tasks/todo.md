@@ -131,6 +131,15 @@ Temuan user: pill MUNCUL di mobile (fix icon Gauge terbukti) tapi (a) tap pill t
 3. **Hover INDEPENDEN per chart** (revert section 10 #2 — salah baca): heatmap & trend masing-masing punya focus sendiri, TIDAK terhubung.
 4. **Filter: kembalikan 1d/7d/30d** (user minta tetap ada) di samping Week/Month/Custom/All. Konsultasi UX agent soal redundansi → trim sesuai rekomendasi.
 
+## 12. FIX round (review user 2026-10-09 — pill Context & layout monitoring)
+1. **HAPUS baris "Context" di pill** (index.client.tsx ~:103) — implementasi liar di luar spek (ctx = latest prompt vs window, `shared/usage.ts:42`), angka salah kalibrasi (380% = 498.4K/131.1K, prompt > window, mustahil). Kembalikan rows pill = Input/Output/Reasoning/Cache Read/Cache Write/Cache Hit/Cost. Matikan/hapus juga `ctx` computation kalau cuma dipakai itu (biar ga dead code sesat).
+2. **Heatmap vertikal (BUG)**: grid ke-transpose — 53 minggu jadi tumpukan ke bawah. Harus horizontal: 7 baris weekday × 53 kolom minggu, width = 53×(cell+gap), horizontal scroll di sempit. Tooltip tetap anchor ke cell.
+3. **Spacing header**: baris "93 active days · 3.3B tokens · 365 days" jangan nempel ke judul OVERVIEW — kasih gap.
+4. **Trend chart kosong di filter 7d (BUG)**: debug daily bucketing utk window 7d (kemungkinan salah di filterDateRange/endMs pasca round 10). Acceptance: 7d menampilkan 7 bar, terisi kalau ada sesi. Tambah test bucketing 7d.
+5. **Tinggi card**: kartu MOST ACTIVE DAY memanjang kosong (grid stretch) — card harus hug content / tinggi baris seimbang (alignItems flex-start atau tinggi natural per kartu).
+
+Acceptance: typecheck pass · test pass (44+ dengan test 7d bucketing baru) · reload → `plugin ls` running ERROR kosong · logs bersih · verify script tak berubah · audit RN 0 hit · commit (`fix:` deskriptif) JANGAN push.
+
 ## Handoff (pindah device)
 - Repo: https://github.com/Davnn1/paseo-usage-plugin.git (branch `main`).
 - Install di mesin baru: `git clone` → `npm install` → cek `pluginsEnabled` di `~/.paseo/config.json` daemon lokal → `paseo plugin install ./usage` **dari parent folder (path RELATIF — path absolut = silent no-op, pitfall terverifikasi)** → `paseo plugin ls` harus `running`, cek kolom ERROR.

@@ -1,9 +1,8 @@
 import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import type { SessionSummaryOutput } from "../shared/usage";
-import { readLastMessageUsage, readSessionRowById } from "./adapters/opencode";
+import { readSessionRowById } from "./adapters/opencode";
 import { readAgyProxyRows, type AgyCall } from "./adapters/agy-proxy";
-import { resolveContextWindow } from "./context-windows";
 
 const AGENTS_DIR = `${process.env.HOME}/.paseo/agents`;
 
@@ -19,7 +18,6 @@ function emptySummary(): SessionSummaryOutput {
     costUsd: 0,
     cacheHitRatio: 0,
     timeCreated: 0,
-    ctx: null,
   };
 }
 
@@ -64,7 +62,6 @@ export function findAgentFile(agentsDir: string, agentId: string): string | null
 export interface SessionSummaryDeps {
   agentsDir?: string;
   readSession?: typeof readSessionRowById;
-  readLastMessage?: typeof readLastMessageUsage;
   readAgyCalls?: () => { calls: AgyCall[] };
 }
 
@@ -72,13 +69,12 @@ export interface SessionSummaryDeps {
  * Resolve the current usage of the session linked to a Paseo agent.
  * - opencode: session table row + live context from the last message
  * - antigravity / antigravity-acp: agy-usage-proxy calls attributed by
- *   conversation id (or proxy agentId tag); ctx from the latest call
+ *   conversation id (or proxy agentId tag)
  * Honest fallbacks everywhere: missing file, missing id, no matching calls.
  */
 export function resolveSessionSummary(agentId: string, deps: SessionSummaryDeps = {}): SessionSummaryOutput {
   const agentsDir = deps.agentsDir ?? AGENTS_DIR;
   const readSession = deps.readSession ?? readSessionRowById;
-  const readLastMessage = deps.readLastMessage ?? readLastMessageUsage;
 
   const file = findAgentFile(agentsDir, agentId);
   if (!file) return notFound("agent file not found");
@@ -93,7 +89,7 @@ export function resolveSessionSummary(agentId: string, deps: SessionSummaryDeps 
   const provider = typeof agent.provider === "string" ? agent.provider : undefined;
   const title = typeof agent.title === "string" ? agent.title : undefined;
 
-  if (provider === "opencode") return resolveOpenCode(agentId, agentJson, { readSession, readLastMessage });
+  if (provider === "opencode") return resolveOpenCode(agentJson, { readSession });
   if (provider === "antigravity" || provider === "antigravity-acp") {
     return resolveAntigravity(agentId, agentJson, provider, title, deps);
   }
@@ -101,27 +97,13 @@ export function resolveSessionSummary(agentId: string, deps: SessionSummaryDeps 
 }
 
 function resolveOpenCode(
-  _agentId: string,
   agentJson: unknown,
-  deps: { readSession: NonNullable<SessionSummaryDeps["readSession"]>; readLastMessage: NonNullable<SessionSummaryDeps["readLastMessage"]> },
+  deps: { readSession: NonNullable<SessionSummaryDeps["readSession"]> },
 ): SessionSummaryOutput {
   const sessionId = extractSessionId(agentJson);
   if (!sessionId || !sessionId.startsWith("ses_")) return notFound("no linked opencode session");
   const row = deps.readSession(sessionId);
   if (!row) return notFound(`session ${sessionId} not in opencode.db`);
-
-  let ctx: SessionSummaryOutput["ctx"] = null;
-  const last = deps.readLastMessage(sessionId);
-  if (last) {
-    const windowTokens = resolveContextWindow(last.model);
-    if (windowTokens) {
-      ctx = {
-        usedTokens: last.usedTokens,
-        windowTokens,
-        pct: Math.round((last.usedTokens / windowTokens) * 1000) / 10,
-      };
-    }
-  }
 
   return {
     found: true,
@@ -138,7 +120,6 @@ function resolveOpenCode(
     costUsd: row.costUsd,
     cacheHitRatio: row.cacheHitRatio,
     timeCreated: row.timeCreated,
-    ctx,
   };
 }
 
@@ -179,17 +160,6 @@ function resolveAntigravity(
     if (!latest || Date.parse(call.ts) > Date.parse(latest.ts)) latest = call;
   }
 
-  let ctx: SessionSummaryOutput["ctx"] = null;
-  if (latest) {
-    const windowTokens = resolveContextWindow(latest.model);
-    if (windowTokens) {
-      ctx = {
-        usedTokens: latest.promptTokens,
-        windowTokens,
-        pct: Math.round((latest.promptTokens / windowTokens) * 1000) / 10,
-      };
-    }
-  }
   const denom = sums.cacheReadTokens + sums.inputTokens;
 
   return {
@@ -203,7 +173,6 @@ function resolveAntigravity(
     costUsd: 0,
     cacheHitRatio: denom > 0 ? sums.cacheReadTokens / denom : 0,
     timeCreated: Number.isFinite(earliestMs) ? earliestMs : 0,
-    ctx,
   };
 }
 

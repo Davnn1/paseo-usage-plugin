@@ -43,7 +43,7 @@ export function Dashboard({
   return (
     <View style={stylesGrid(compact)}>
       <View style={stylesCard(theme, compact)}>
-        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
           <Text style={stylesCardTitle(theme)}>OVERVIEW</Text>
           <Text style={{ color: theme.colors.foregroundMuted, fontSize: 10 }}>Last 365 days</Text>
         </View>
@@ -78,6 +78,7 @@ function stylesGrid(compact: boolean) {
   return {
     flexDirection: "row" as const,
     flexWrap: "wrap" as const,
+    alignItems: "flex-start" as const,
     gap: compact ? 8 : 12,
     width: "100%" as const,
   };
@@ -246,11 +247,11 @@ function Heatmap({
               ))}
             </View>
             <View style={{ width: gridWidth, gap }}>
-              {Array.from({ length: weeks }, (_, week) => (
-                <View key={week} style={{ flexDirection: "row", gap }}>
-                  {WEEKDAY_MON_FIRST.map((weekday) => {
+              {WEEKDAY_MON_FIRST.map((weekday) => (
+                <View key={weekday} style={{ flexDirection: "row", gap }}>
+                  {Array.from({ length: weeks }, (_, week) => {
                     const cellPoint = grid[weekday]?.[week];
-                    if (!cellPoint) return <View key={weekday} style={{ width: cell, height: cell }} />;
+                    if (!cellPoint) return <View key={week} style={{ width: cell, height: cell }} />;
                     return cellAt(cellPoint);
                   })}
                 </View>

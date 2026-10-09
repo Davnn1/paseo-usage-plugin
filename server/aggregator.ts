@@ -20,7 +20,6 @@ import { readOpenCodeRows } from "./adapters/opencode";
 import { readCodexRows } from "./adapters/codex";
 import { collectAntigravity } from "./adapters/antigravity";
 import { readAgyProxyRows } from "./adapters/agy-proxy";
-import { resolveContextWindow } from "./context-windows";
 import { backendForProvider, mapSourceStatus } from "./discovery";
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -173,18 +172,6 @@ export class UsageAggregator {
 
     const filtered = selectPeriodRows(rows, period, nowMs, startDate, endDate);
     const { totals, entries } = aggregateUsage(filtered);
-
-    // Live context occupancy: latest cache-inclusive prompt per harness model.
-    for (const entry of entries) {
-      if (entry.backend !== "antigravity-cli" && entry.backend !== "antigravity-acp" && entry.backend !== "agy-proxy") {
-        continue;
-      }
-      const latest = agyProxy.latestPromptByKey.get(`${entry.backend}${entry.provider}${entry.model}`);
-      const windowTokens = resolveContextWindow(entry.model);
-      if (latest && windowTokens && windowTokens > 0) {
-        entry.ctx = { usedTokens: latest.promptTokens, windowTokens };
-      }
-    }
 
     const byProviderMap = new Map<string, { backend: string; provider: string; entries: UsageEntry[] }>();
     for (const entry of entries) {

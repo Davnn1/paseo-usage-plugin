@@ -123,44 +123,6 @@ export function readSessionRowById(sessionId: string, dbPath: string = DB_PATH):
   }
 }
 
-export interface LastMessageUsage {
-  model: string;
-  /** Cache-inclusive context occupancy: input + cache.read of the last message. */
-  usedTokens: number;
-  timeCreated: number;
-}
-
-/**
- * Latest assistant message of a session; usedTokens measures live context
- * occupancy (input + cache read). null when the session has no messages.
- */
-export function readLastMessageUsage(sessionId: string, dbPath: string = DB_PATH): LastMessageUsage | null {
-  const db = new DatabaseSync(dbPath, { readOnly: true });
-  try {
-    const row = db
-      .prepare(
-        `SELECT data, time_created FROM message
-         WHERE session_id = ?
-         ORDER BY time_created DESC LIMIT 1`,
-      )
-      .get(sessionId) as { data: string; time_created: number } | undefined;
-    if (!row) return null;
-    const data = JSON.parse(row.data) as Record<string, unknown>;
-    const tokens = (data.tokens ?? {}) as Record<string, unknown>;
-    const cache = (tokens.cache ?? {}) as Record<string, unknown>;
-    const num = (value: unknown) => (typeof value === "number" && Number.isFinite(value) ? value : 0);
-    return {
-      model: typeof data.modelID === "string" && data.modelID ? data.modelID : "unknown",
-      usedTokens: num(tokens.input) + num(cache.read),
-      timeCreated: row.time_created,
-    };
-  } catch {
-    return null;
-  } finally {
-    db.close();
-  }
-}
-
 function cacheHit(cacheReadTokens: number, inputTokens: number): number {
   const denom = cacheReadTokens + inputTokens;
   return denom > 0 ? cacheReadTokens / denom : 0;

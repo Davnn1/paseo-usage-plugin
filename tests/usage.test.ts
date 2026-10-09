@@ -448,7 +448,6 @@ const sessionFound = {
   costUsd: 1.2345,
   provider: "kimi",
   model: "kimi-for-coding",
-  ctx: null,
 };
 
 const dailyTotals = {
@@ -659,57 +658,7 @@ test("aggregator honors startDate/endDate with inclusive boundaries (live db)", 
 // Context window occupancy
 // ---------------------------------------------------------------------------
 
-import { resolveContextWindow } from "../server/context-windows";
 
-test("resolveContextWindow: env override wins, then fallbacks, unknown is null", () => {
-  assert.equal(resolveContextWindow("gemini-3-flash"), 1_048_576);
-  assert.equal(resolveContextWindow("claude-sonnet-4-6"), 200_000);
-  assert.equal(resolveContextWindow("claude-opus-4-1"), 200_000);
-  assert.equal(resolveContextWindow("gpt-oss-120b-mid"), 131_072);
-  assert.equal(resolveContextWindow("some-unknown-model"), null);
-
-  const override = { "gemini-3-flash": 500_000, "custom-": 123_456 };
-  assert.equal(resolveContextWindow("gemini-3-flash", override), 500_000); // exact env wins
-  assert.equal(resolveContextWindow("custom-model-x", override), 123_456); // longest prefix
-  assert.equal(resolveContextWindow("gpt-oss-120b-mid", override), 131_072); // fallback when no prefix matches
-});
-
-test("aggregator fills ctx for harness entries from proxied latest prompt", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "usage-ctx-"));
-  const metrics = join(dir, "metrics.jsonl");
-  writeFileSync(
-    metrics,
-    [
-      JSON.stringify({ ts: "2026-10-08T09:00:00.000Z", source: "cli", model: "gemini-3-flash", status: 200, promptTokens: 100, outputTokens: 10 }),
-      JSON.stringify({ ts: "2026-10-08T10:00:00.000Z", source: "cli", model: "gemini-3-flash", status: 200, promptTokens: 524_288, outputTokens: 20 }),
-      JSON.stringify({ ts: "2026-10-08T11:00:00.000Z", source: "acp", model: "mystery-model", status: 200, promptTokens: 999 }),
-    ].join("\n"),
-  );
-  const previous = process.env.AGY_PROXY_METRICS;
-  process.env.AGY_PROXY_METRICS = metrics;
-  try {
-    const { UsageAggregator } = await import("../server/aggregator");
-    const aggregator = new UsageAggregator();
-    const summary = aggregator.summarize("all", {});
-    const gemini = summary.byProvider
-      .flatMap((group) => group.entries)
-      .find((entry) => entry.backend === "antigravity-cli" && entry.model === "gemini-3-flash");
-    // newest prompt wins: 42% of 1,048,576
-    assert.deepEqual(gemini?.ctx, { usedTokens: 524_288, windowTokens: 1_048_576 });
-    const mystery = summary.byProvider
-      .flatMap((group) => group.entries)
-      .find((entry) => entry.model === "mystery-model");
-    assert.equal(mystery?.ctx, undefined); // unknown window stays honest
-    // opencode rows untouched
-    const kimi = summary.byProvider
-      .flatMap((group) => group.entries)
-      .find((entry) => entry.backend === "opencode" && entry.provider === "kimi");
-    assert.equal(kimi?.ctx, undefined);
-  } finally {
-    if (previous === undefined) delete process.env.AGY_PROXY_METRICS;
-    else process.env.AGY_PROXY_METRICS = previous;
-  }
-});
 
 test("session resolve stays honest for antigravity agents (no opencode session)", () => {
   const dir = mkdtempSync(join(tmpdir(), "usage-agents-agy-"));
@@ -731,66 +680,8 @@ test("session resolve stays honest for antigravity agents (no opencode session)"
 // Per-session context occupancy
 // ---------------------------------------------------------------------------
 
-test("resolveContextWindow: opencode model families", () => {
-  assert.equal(resolveContextWindow("k3"), 262_144);
-  assert.equal(resolveContextWindow("kimi-k3-0711"), 262_144);
-  assert.equal(resolveContextWindow("qwen3-coder"), 131_072);
-  assert.equal(resolveContextWindow("deepseek-v4-flash"), 131_072);
-  assert.equal(resolveContextWindow("MiMo-v2"), 131_072);
-  assert.equal(resolveContextWindow("glm-4.6"), null);
-});
 
-test("opencode session ctx = last message input+cache.read vs window", () => {
-  const dir = mkdtempSync(join(tmpdir(), "usage-ctx-session-"));
-  const ws = join(dir, "ws1");
-  mkdirSync(ws);
-  writeFileSync(
-    join(ws, "agent-oc.json"),
-    JSON.stringify({ provider: "opencode", persistence: { sessionId: "ses_ctx" }, title: "Ctx session" }),
-  );
-  const result = resolveSessionSummary("agent-oc", {
-    agentsDir: dir,
-    readSession: () => ({
-      id: "ses_ctx",
-      title: "Ctx session",
-      provider: "kimi",
-      model: "k3",
-      inputTokens: 1000,
-      outputTokens: 100,
-      reasoningTokens: 10,
-      cacheReadTokens: 5000,
-      cacheWriteTokens: 0,
-      costUsd: 0.5,
-      cacheHitRatio: 0.83,
-      timeCreated: 1,
-    }),
-    readLastMessage: () => ({ model: "k3", usedTokens: 131_072, timeCreated: 2 }),
-  });
-  assert.equal(result.found, true);
-  // 131072 / 262144 = 50%
-  assert.deepEqual(result.ctx, { usedTokens: 131_072, windowTokens: 262_144, pct: 50 });
-});
 
-test("opencode session ctx stays null when the model window is unknown", () => {
-  const dir = mkdtempSync(join(tmpdir(), "usage-ctx-null-"));
-  const ws = join(dir, "ws1");
-  mkdirSync(ws);
-  writeFileSync(
-    join(ws, "agent-oc2.json"),
-    JSON.stringify({ provider: "opencode", persistence: { sessionId: "ses_ctx2" } }),
-  );
-  const result = resolveSessionSummary("agent-oc2", {
-    agentsDir: dir,
-    readSession: () => ({
-      id: "ses_ctx2", title: "t", provider: "p", model: "mystery",
-      inputTokens: 1, outputTokens: 1, reasoningTokens: 0, cacheReadTokens: 0,
-      cacheWriteTokens: 0, costUsd: 0, cacheHitRatio: 0, timeCreated: 1,
-    }),
-    readLastMessage: () => ({ model: "mystery", usedTokens: 500, timeCreated: 2 }),
-  });
-  assert.equal(result.found, true);
-  assert.equal(result.ctx, null);
-});
 
 test("antigravity session attribution matches conversationId or agentId", () => {
   const dir = mkdtempSync(join(tmpdir(), "usage-ctx-agy-"));
@@ -817,8 +708,6 @@ test("antigravity session attribution matches conversationId or agentId", () => 
   assert.equal(byConversation.found, true);
   assert.equal(byConversation.backend, "antigravity-cli");
   assert.equal(byConversation.inputTokens, 100_000 + 209_715); // conv-other excluded
-  // newest matched prompt 209715 / 1048576 = 20.0%
-  assert.deepEqual(byConversation.ctx, { usedTokens: 209_715, windowTokens: 1_048_576, pct: 20 });
 
   writeFileSync(
     join(ws, "agent-tagged.json"),
@@ -830,18 +719,39 @@ test("antigravity session attribution matches conversationId or agentId", () => 
   });
   assert.equal(byAgentTag.found, true);
   assert.equal(byAgentTag.backend, "antigravity-acp");
-  assert.equal(byAgentTag.ctx?.usedTokens, 5);
+  assert.equal(byAgentTag.inputTokens, 5);
 });
 
-test("buildPillText: ctx meter label (used/window-pct) with usage fallback", () => {
-  const withCtx = buildPillText({ ...sessionFound, ctx: { usedTokens: 131_072, windowTokens: 262_144, pct: 50 } }, null);
-  assert.equal(withCtx.label, "131.1K/262.1K-50%");
-  assert.match(withCtx.title, /ctx 131\.1K\/262\.1K \(50%\)/);
+test("buildPillText: session label is the usage summary", () => {
+  const text = buildPillText(sessionFound, null);
+  assert.equal(text.label, "1.5M/60.0K·90%");
+  assert.match(text.title, /Session: Fix the thing/);
+});
 
-  const gemini = buildPillText({ ...sessionFound, ctx: { usedTokens: 635_200, windowTokens: 1_048_576, pct: 63 } }, null);
-  assert.equal(gemini.label, "635.2K/1M-63%"); // window trims the trailing .0
+test("dashboard 7d bucketing: 7 daily points, active days, no rows lost", async () => {
+  const { UsageAggregator } = await import("../server/aggregator");
+  const aggregator = new UsageAggregator();
+  // Sliding 7d window spans 8 calendar days, so exact-sum checks use an
+  // explicit 7-calendar-day range where filter and bucket share boundaries.
+  const end = dateKeyUtc(Date.now());
+  const start = dateKeyUtc(Date.now() - 6 * DAY);
+  const dashboard = aggregator.dashboard("all", { startDate: start, endDate: end });
+  assert.equal(dashboard.series.daily.length, 7);
+  assert.equal(dashboard.series.daily[0].date, start);
+  assert.equal(dashboard.series.daily[6].date, end);
+  assert.ok(
+    dashboard.series.daily.some((point) => point.inputTokens + point.outputTokens > 0),
+    "expected active days within the 7-day range",
+  );
+  const summary = aggregator.summarize("all", { startDate: start, endDate: end });
+  const dailyTokensSum = dashboard.series.daily.reduce(
+    (sum, point) => sum + point.inputTokens + point.outputTokens,
+    0,
+  );
+  assert.equal(dailyTokensSum, summary.totals.inputTokens + summary.totals.outputTokens);
 
-  const withoutCtx = buildPillText(sessionFound, null); // ctx null -> usage fallback
-  assert.equal(withoutCtx.label, "1.5M/60.0K·90%");
-  assert.doesNotMatch(withoutCtx.label, /ctx/);
+  // The 7d period chip itself still buckets exactly 7 points ending today.
+  const sliding = aggregator.dashboard("7d", {});
+  assert.equal(sliding.series.daily.length, 7);
+  assert.equal(sliding.series.daily[6].date, dateKeyUtc(Date.now()));
 });

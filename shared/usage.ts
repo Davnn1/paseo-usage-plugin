@@ -39,8 +39,6 @@ export const usageEntrySchema = z.object({
   firstUsed: z.number(),
   lastUsed: z.number(),
   cacheHitRatio: z.number(),
-  /** Live context occupancy for harness-proxied models (latest prompt vs window). */
-  ctx: z.object({ usedTokens: z.number(), windowTokens: z.number() }).optional(),
 });
 export type UsageEntry = z.infer<typeof usageEntrySchema>;
 
@@ -189,8 +187,6 @@ export const sessionSummaryOutputSchema = z.object({
   costUsd: z.number(),
   cacheHitRatio: z.number(),
   timeCreated: z.number(),
-  /** Live context occupancy for this session; null when unknown. */
-  ctx: z.object({ usedTokens: z.number(), windowTokens: z.number(), pct: z.number() }).nullable(),
 });
 export type SessionSummaryOutput = z.infer<typeof sessionSummaryOutputSchema>;
 
@@ -210,19 +206,6 @@ function compactTokens(value: number): string {
   return String(Math.round(value));
 }
 
-/** Window sizes read cleaner without a trailing .0 (1M, 200K, 131K). */
-function compactWindow(value: number): string {
-  if (value >= 1_000_000) {
-    const m = value / 1_000_000;
-    return `${m.toFixed(1).replace(/\.0$/, "")}M`;
-  }
-  if (value >= 1_000) {
-    const k = value / 1_000;
-    return `${k.toFixed(1).replace(/\.0$/, "")}K`;
-  }
-  return String(value);
-}
-
 export interface PillText {
   label: string;
   title: string;
@@ -235,25 +218,17 @@ export interface PillText {
  * crowded; cost and the full breakdown live in the title/menu.
  */
 export function buildPillText(
-  session: Pick<SessionSummaryOutput, "found" | "reason" | "title" | "inputTokens" | "outputTokens" | "reasoningTokens" | "cacheReadTokens" | "cacheWriteTokens" | "cacheHitRatio" | "costUsd" | "provider" | "model" | "ctx"> | null,
+  session: Pick<SessionSummaryOutput, "found" | "reason" | "title" | "inputTokens" | "outputTokens" | "reasoningTokens" | "cacheReadTokens" | "cacheWriteTokens" | "cacheHitRatio" | "costUsd" | "provider" | "model"> | null,
   daily: UsageTotals | null,
 ): PillText {
   if (session?.found) {
-    // Primary: the context window meter (used/window-pct). Fallback: usage
-    // summary when no context data exists — never blank.
-    const label = session.ctx
-      ? `${compactTokens(session.ctx.usedTokens)}/${compactWindow(session.ctx.windowTokens)}-${Math.round(session.ctx.pct)}%`
-      : `${compactTokens(session.inputTokens)}/${compactTokens(session.outputTokens)}·${(session.cacheHitRatio * 100).toFixed(0)}%`;
     return {
-      label,
+      label: `${compactTokens(session.inputTokens)}/${compactTokens(session.outputTokens)}·${(session.cacheHitRatio * 100).toFixed(0)}%`,
       title:
         `Session: ${session.title || "untitled"} — ${compactTokens(session.inputTokens)} in / ${compactTokens(session.outputTokens)} out ` +
         `(reasoning ${compactTokens(session.reasoningTokens)}), cache read ${compactTokens(session.cacheReadTokens)}, ` +
         `write ${compactTokens(session.cacheWriteTokens)}, hit ${(session.cacheHitRatio * 100).toFixed(1)}%, ` +
-        `cost $${session.costUsd.toFixed(4)} · ${session.provider}/${session.model}` +
-        (session.ctx
-          ? ` · ctx ${compactTokens(session.ctx.usedTokens)}/${compactTokens(session.ctx.windowTokens)} (${Math.round(session.ctx.pct)}%)`
-          : ""),
+        `cost $${session.costUsd.toFixed(4)} · ${session.provider}/${session.model}`,
     };
   }
   if (daily) {
