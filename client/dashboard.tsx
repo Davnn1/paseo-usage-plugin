@@ -542,15 +542,19 @@ function MostActiveAndWeekly({
 }) {
   const barRefs = useRef(new Map<number, View>());
   const [width, setWidth] = useState(0);
+  const [plotHeight, setPlotHeight] = useState(0);
   const [cross, setCross] = useState<number | null>(null);
   useEffect(() => tips.onDismiss(() => setCross(null)), [tips]);
   const maxWeekly = Math.max(1, ...series.weekly.map((point) => point.tokens));
   const mad = series.mostActiveDay;
   const slotWidth = width > 0 ? width / 7 : 0;
 
-  // Percentage-based geometry: the plot area height comes from the flex
-  // chain (stretched card), never from measured content - so the bars cannot
-  // feed back into their own container height.
+  // The plot wrapper is flex:1 inside the stretched card, so its height is
+  // determined by ancestors, never by the bars - measuring it once per
+  // change is a stable fixed point (no feedback loop), and bars render as
+  // fractional pixels of that measured height.
+  const labelSpace = 14;
+  const barArea = Math.max(0, plotHeight - labelSpace);
   return (
     <View style={{ flex: 1, gap: 10, marginTop: 2 }}>
       <View>
@@ -569,17 +573,21 @@ function MostActiveAndWeekly({
       </View>
       <View style={{ flex: 1, minHeight: compact ? 56 : 72, flexDirection: "column", gap: 4 }}>
         <View
-          onLayout={(event) => setWidth(event.nativeEvent.layout.width)}
-          style={{ flex: 1, flexDirection: "row", alignItems: "stretch", gap: 6 }}
+          onLayout={(event) => {
+            setWidth(event.nativeEvent.layout.width);
+            const h = event.nativeEvent.layout.height;
+            setPlotHeight((current) => (Math.abs(current - h) < 0.5 ? current : h));
+          }}
+          style={{ flex: 1, flexDirection: "row", alignItems: "flex-end", gap: 6 }}
         >
           {WEEKDAY_MON_FIRST.map((weekday) => {
             const point: WeeklyPoint | undefined = series.weekly[weekday];
-            const inPct = point ? (point.inputTokens / maxWeekly) * 100 : 0;
-            const outPct = point ? (point.outputTokens / maxWeekly) * 100 : 0;
+            const inH = point && point.inputTokens > 0 ? Math.max(2, (point.inputTokens / maxWeekly) * barArea) : 0;
+            const outH = point ? (point.outputTokens / maxWeekly) * barArea : 0;
             const bar = (
-              <View style={{ width: "100%", height: "100%", justifyContent: "flex-end", opacity: point && point.tokens > 0 ? 1 : 0.15 }}>
-                <View style={{ height: `${inPct}%`, minHeight: point && point.inputTokens > 0 ? 2 : 0, borderTopLeftRadius: 3, borderTopRightRadius: 3, backgroundColor: theme.colors.statusSuccess }} />
-                <View style={{ height: `${outPct}%`, backgroundColor: theme.colors.accent }} />
+              <View style={{ width: "100%", opacity: point && point.tokens > 0 ? 1 : 0.15 }}>
+                <View style={{ height: inH, borderTopLeftRadius: 3, borderTopRightRadius: 3, backgroundColor: theme.colors.statusSuccess }} />
+                <View style={{ height: outH, backgroundColor: theme.colors.accent }} />
               </View>
             );
           return (
@@ -635,7 +643,7 @@ function MostActiveAndWeekly({
           />
         ) : null}
         </View>
-        <View style={{ flexDirection: "row", gap: 6, height: 12 }}>
+        <View style={{ flexDirection: "row", gap: 6, height: labelSpace - 2 }}>
           {WEEKDAY_MON_FIRST.map((weekday) => (
             <View key={weekday} style={{ flex: 1, alignItems: "center" }}>
               <Text style={{ color: theme.colors.foregroundMuted, fontSize: 9 }}>
