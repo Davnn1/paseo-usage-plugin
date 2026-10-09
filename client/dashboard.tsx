@@ -545,7 +545,9 @@ function MostActiveAndWeekly({
   const [plotHeight, setPlotHeight] = useState(0);
   const [cross, setCross] = useState<number | null>(null);
   useEffect(() => tips.onDismiss(() => setCross(null)), [tips]);
-  const maxWeekly = Math.max(1, ...series.weekly.map((point) => point.tokens));
+  // Bars normalize against input+output only: dailyTokens includes cache
+  // reads, which would shrink visible bars on cache-heavy weeks.
+  const maxWeekly = Math.max(1, ...series.weekly.map((point) => point.inputTokens + point.outputTokens));
   const mad = series.mostActiveDay;
   const slotWidth = width > 0 ? width / 7 : 0;
 
@@ -582,8 +584,8 @@ function MostActiveAndWeekly({
         >
           {WEEKDAY_MON_FIRST.map((weekday) => {
             const point: WeeklyPoint | undefined = series.weekly[weekday];
-            const inH = point && point.inputTokens > 0 ? Math.max(2, (point.inputTokens / maxWeekly) * barArea) : 0;
-            const outH = point ? (point.outputTokens / maxWeekly) * barArea : 0;
+            const inH = point && point.inputTokens > 0 ? Math.max(3, (point.inputTokens / maxWeekly) * barArea) : 0;
+            const outH = point && point.outputTokens > 0 ? Math.max(3, (point.outputTokens / maxWeekly) * barArea) : 0;
             const bar = (
               <View style={{ width: "100%", opacity: point && point.tokens > 0 ? 1 : 0.15 }}>
                 <View style={{ height: inH, borderTopLeftRadius: 3, borderTopRightRadius: 3, backgroundColor: theme.colors.statusSuccess }} />
