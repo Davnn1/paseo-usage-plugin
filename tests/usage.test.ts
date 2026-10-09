@@ -843,7 +843,8 @@ test("WIB boundary: a 06:00 WIB session belongs to its local day, not the previo
 // Protobuf walker + gen_metadata decoding
 // ---------------------------------------------------------------------------
 
-import { decodeGenMetadata } from "../server/adapters/antigravity";
+import { collectAntigravity, decodeGenMetadata, enrichmentKey } from "../server/adapters/antigravity";
+// (single import site for the antigravity adapter suite)
 import { varintAt, walkProtobuf } from "../server/protobuf";
 
 function varintBytes(value: number): number[] {
@@ -871,8 +872,20 @@ function varintField(field: number, value: number): number[] {
 }
 
 /** Build a synthetic gen_metadata blob with the same paths as the real store. */
-function buildGenBlob(input: number, output: number, model: string, used: number, max: number): Uint8Array {
-  const usage = [...varintField(1, 1), ...varintField(2, input), ...varintField(3, output)];
+function buildGenBlob(input: number, output: number, model: string, used: number, max: number, thinking = 0, sessionId = ""): Uint8Array {
+  const usage = [
+    ...varintField(1, 1),
+    ...varintField(2, input),
+    ...varintField(3, output + thinking),
+    ...varintField(9, thinking),
+    ...varintField(10, output),
+  ];
+  if (sessionId) {
+    usage.push(...lenDelim(8, [
+      ...lenDelim(1, [...new TextEncoder().encode("sessionID")]),
+      ...lenDelim(2, [...new TextEncoder().encode(sessionId)]),
+    ]));
+  }
   const context = [...varintField(1, used), ...varintField(4, max)];
   const inner = [
     ...varintField(3, 1298),
@@ -894,11 +907,13 @@ test("protobuf walker decodes synthetic blobs at locked paths", () => {
 });
 
 test("decodeGenMetadata extracts tokens, model, and context", () => {
-  const decoded = decodeGenMetadata(buildGenBlob(12_345, 678, "gemini-3.8-flash", 15_000, 256_000));
+  const decoded = decodeGenMetadata(buildGenBlob(12_345, 678, "gemini-3.8-flash", 15_000, 256_000, 222));
   assert.deepEqual(decoded, {
     model: "gemini-3.8-flash",
     inputTokens: 12_345,
-    outputTokens: 678,
+    outputTokens: 678, // 1.4.10 visible output
+    thinkingTokens: 222, // 1.4.9
+    sessionId: null, // synthetic blob without 1.4.8
     runId: null, // synthetic blob has no top-level run uuid
     contextUsed: 15_000,
     contextMax: 256_000,
@@ -940,7 +955,6 @@ test("scanConversationDb aggregates per model and keeps cache columns honest", (
 // Anti double-counting, per-generation dates, walker robustness
 // ---------------------------------------------------------------------------
 
-import { collectAntigravity } from "../server/adapters/antigravity";
 
 test("proxy rows never enter aggregates: same call counted once (store only)", async () => {
   const dir = mkdtempSync(join(tmpdir(), "usage-dedup-"));
@@ -1077,4 +1091,34 @@ test("daily and weekly bucketing produce per-model breakdowns (top 8 + other)", 
   assert.equal(thursday.models[0].model, "model-8");
   const monday = weekly[1]; // 2026-10-05
   assert.equal(monday.models[0].tokens, 80);
+});
+
+test("cache columns are enriched from proxy matches only (no aggregate change)", () => {
+  const home = mkdtempSync(join(tmpdir(), "usage-enrich-"));
+  const convDir = join(home, ".gemini", "antigravity-cli", "conversations");
+  mkdirSync(convDir, { recursive: true });
+  const convId = "aaaaaaaa-1111-4222-8333-444444444444";
+  const dbPath = join(convDir, `${convId}.db`);
+  const db = new DatabaseSync(dbPath);
+  db.exec("CREATE TABLE steps (id INTEGER)");
+  db.exec("CREATE TABLE gen_metadata (idx INTEGER PRIMARY KEY, data BLOB, size INTEGER DEFAULT 0)");
+  db.prepare("INSERT INTO gen_metadata VALUES (0, ?, 0)").run(
+    Buffer.from(buildGenBlob(1_000, 20, "gemini-3.8-flash", 500, 256_000, 80, "harness-42")), // thinking 80
+  );
+  db.close();
+
+  // enrichment key anchors on the harness session id shared with the proxy
+  const key = enrichmentKey(convId, "harness-42", 20, 80);
+  const hit = collectAntigravity(home, new Map([[key, { cacheReadTokens: 4_064, cacheWriteTokens: 0 }]]));
+  assert.equal(hit.rows.length, 1);
+  assert.equal(hit.rows[0].cacheReadTokens, 4_064);
+  assert.equal(hit.rows[0].reasoningTokens, 80);
+  assert.equal(hit.rows[0].outputTokens, 20);
+  // grand total (in + out + reasoning) unchanged by enrichment
+  assert.equal(hit.rows[0].inputTokens + hit.rows[0].outputTokens + hit.rows[0].reasoningTokens, 1_100);
+
+  // no match -> honest zeros, still one row
+  const miss = collectAntigravity(home);
+  assert.equal(miss.rows[0].cacheReadTokens, 0);
+  assert.equal(miss.rows.length, 1);
 });

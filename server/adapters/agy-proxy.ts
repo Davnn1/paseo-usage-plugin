@@ -17,6 +17,8 @@ export interface AgyCall {
   agentId?: string;
   /** Optional Antigravity conversation id for per-session attribution. */
   conversationId?: string;
+  /** Harness session id, shared with the gen_metadata blob (1.4.8.2). */
+  sessionId?: string;
 }
 
 export interface AgyProxyResult {
@@ -64,6 +66,7 @@ export function parseAgyLine(line: string): AgyCall | null {
     model: typeof obj.model === "string" && obj.model ? obj.model : "unknown",
     agentId: typeof obj.agentId === "string" && obj.agentId ? obj.agentId : undefined,
   conversationId: typeof obj.conversationId === "string" && obj.conversationId ? obj.conversationId : undefined,
+  sessionId: typeof obj.sessionId === "string" && obj.sessionId ? obj.sessionId : undefined,
     status: num(obj.status),
     promptTokens: num(obj.promptTokens),
     outputTokens: num(obj.outputTokens),

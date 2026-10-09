@@ -20,8 +20,13 @@ export interface Generation {
   model: string;
   inputTokens: number;
   outputTokens: number;
+  thinkingTokens: number;
+  /** Conversation UUID - the database file name this generation was read from. */
+  conversation: string;
   /** Run/trajectory UUID from the blob; the conversation is the db file itself. */
   runId: string | null;
+  /** Harness session id (1.4.8.2) - the reliable cross-source match anchor. */
+  sessionId: string | null;
   contextUsed: number | null;
   contextMax: number | null;
   /** The blob carries no timestamp; the conversation file mtime is the
@@ -73,7 +78,9 @@ export function extractConversationId(sessionId: string): string | null {
  * Decode one gen_metadata.data protobuf blob.
  *
  * Locked paths (validated against the live stores):
- * - 1.4.2  input tokens, 1.4.3 output tokens (per generation)
+ * - 1.4.2  prompt tokens (cache-inclusive input)
+ * - 1.4.3  candidates total = thinking + visible output
+ * - 1.4.9  thinking tokens, 1.4.10 visible output tokens
  * - 1.19   model name (string)
  * - 1.9.10 context occupancy message: field 1 = used, field 4 = max
  * - 4      run/trajectory UUID for this generation (NOT the conversation id -
@@ -82,30 +89,40 @@ export function extractConversationId(sessionId: string): string | null {
  */
 export function decodeGenMetadata(data: Uint8Array): {
   model: string;
+  /** Prompt tokens (cache-inclusive), matches the proxy promptTokens. */
   inputTokens: number;
+  /** Visible output tokens (1.4.10); thinking is tracked separately. */
   outputTokens: number;
+  /** Thinking tokens (1.4.9), a component of the candidates total 1.4.3. */
+  thinkingTokens: number;
   /** Run/trajectory UUID of this generation, distinct from the conversation. */
   runId: string | null;
+  /** Harness session id from 1.4.8.2, shared with the proxy metrics. */
+  sessionId: string | null;
   contextUsed: number | null;
   contextMax: number | null;
 } | null {
   const message = walkProtobuf(data);
   const inputTokens = varintAt(message, "1.4.2");
-  const outputTokens = varintAt(message, "1.4.3");
+  const candidatesTotal = varintAt(message, "1.4.3");
   const model = stringAt(message, "1.19");
-  if (inputTokens === null || outputTokens === null || !model) return null;
+  if (inputTokens === null || candidatesTotal === null || !model) return null;
+  const thinkingTokens = varintAt(message, "1.4.9") ?? 0;
+  const visibleOutput = varintAt(message, "1.4.10") ?? candidatesTotal - thinkingTokens;
   const runId = stringAt(message, "4");
+  const sessionId = stringAt(message, "1.4.8.2");
   const contextUsed = varintAt(message, "1.9.10.1");
   const contextMax = varintAt(message, "1.9.10.4") ?? varintAt(message, "1.9.10.2");
-  return { model, inputTokens, outputTokens, runId, contextUsed, contextMax };
+  return { model, inputTokens, outputTokens: visibleOutput, thinkingTokens, runId, sessionId, contextUsed, contextMax };
 }
 
 /** Count steps and fold every decodable gen_metadata row into totals and generations. */
-export function scanConversationDb(dbPath: string): {
+export function scanConversationDb(dbPath: string, conversation?: string): {
   steps: number;
   byModel: Map<string, ModelTotals>;
   generations: Generation[];
 } {
+  const conversationId = conversation ?? dbPath.split("/").pop()?.replace(/\.db$/, "") ?? "";
   const byModel = new Map<string, ModelTotals>();
   const generations: Generation[] = [];
   const db = new DatabaseSync(dbPath, { readOnly: true });
@@ -140,7 +157,10 @@ export function scanConversationDb(dbPath: string): {
         model: decoded.model,
         inputTokens: decoded.inputTokens,
         outputTokens: decoded.outputTokens,
+        thinkingTokens: decoded.thinkingTokens,
+        conversation: conversationId,
         runId: decoded.runId,
+        sessionId: decoded.sessionId,
         contextUsed: decoded.contextUsed,
         contextMax: decoded.contextMax,
         tsMs,
@@ -180,7 +200,7 @@ export function collectStats(dir: string): AntigravityStats | null {
     try {
       if (!statSync(path).isFile()) continue;
       stats.sessions += 1;
-      const { steps, byModel, generations } = scanConversationDb(path);
+      const { steps, byModel, generations } = scanConversationDb(path, name.replace(/\.db$/, ""));
       stats.steps += steps;
       stats.generations.push(...generations);
       for (const [model, totals] of byModel) {
@@ -211,7 +231,25 @@ export function collectStats(dir: string): AntigravityStats | null {
  * gen_metadata blobs are protobuf and carry real per-generation token counts;
  * conversation cache columns hold no token data and stay zero - never invented.
  */
-export function collectAntigravity(home: string = process.env.HOME ?? ""): AntigravityCollection {
+export interface CacheEnrichment {
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+}
+
+/**
+ * Strict match key shared with the aggregator's proxy enrichment map.
+ * Anchored on (conversation, harness sessionId, output, thinking): model
+ * names differ across sources (requested vs served suffixes) and cached
+ * calls record different input splits, but the harness session id matches.
+ */
+export function enrichmentKey(conversation: string, sessionId: string, output: number, thinking: number): string {
+  return `${conversation}|${sessionId}|${output}|${thinking}`;
+}
+
+export function collectAntigravity(
+  home: string = process.env.HOME ?? "",
+  enrichment?: Map<string, CacheEnrichment>,
+): AntigravityCollection {
   const cli = collectStats(storeDir(home, "cli"));
   const acp = collectStats(storeDir(home, "acp"));
   const rows: UsageRow[] = [];
@@ -220,15 +258,21 @@ export function collectAntigravity(home: string = process.env.HOME ?? ""): Antig
     // One row per generation so daily bucketing lands on real days; token
     // sums per model are identical either way.
     for (const generation of stats.generations) {
+      // Cache columns are absent from the protobuf blob; the agy-usage-proxy
+      // fills them via a strict (conversation, model, input, output,
+      // thinking) match - columns only, never rows or token aggregates.
+      const cache = generation.sessionId
+        ? enrichment?.get(enrichmentKey(generation.conversation, generation.sessionId, generation.outputTokens, generation.thinkingTokens))
+        : undefined;
       rows.push({
         backend,
         provider,
         model: generation.model,
         inputTokens: generation.inputTokens,
         outputTokens: generation.outputTokens,
-        reasoningTokens: 0, // not recorded separately in gen_metadata
-        cacheReadTokens: 0, // cache columns carry no token data - honest zeros
-        cacheWriteTokens: 0,
+        reasoningTokens: generation.thinkingTokens,
+        cacheReadTokens: cache?.cacheReadTokens ?? 0,
+        cacheWriteTokens: cache?.cacheWriteTokens ?? 0,
         costUsd: 0, // no cost recorded locally
         timestampMs: generation.tsMs,
       });

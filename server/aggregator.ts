@@ -18,7 +18,7 @@ import {
 } from "../shared/usage";
 import { readOpenCodeRows } from "./adapters/opencode";
 import { readCodexRows } from "./adapters/codex";
-import { collectAntigravity } from "./adapters/antigravity";
+import { collectAntigravity, enrichmentKey, type CacheEnrichment } from "./adapters/antigravity";
 import { readAgyProxyRows } from "./adapters/agy-proxy";
 import { backendForProvider, mapSourceStatus } from "./discovery";
 
@@ -139,12 +139,30 @@ export class UsageAggregator {
       adapterSources.push({ backend: "codex", status: "error", detail: String(error) });
     }
 
-    const antigravity = collectAntigravity();
     // The decoded store is authoritative for aggregates and the model table.
-    // agy-usage-proxy rows are session/pill enrichment only - pushing them
-    // here would double-count every proxied call (same LLM calls, two sources).
-    rows.push(...antigravity.rows);
+    // agy-usage-proxy contributes cache columns only (matched by conversation
+    // + model + token triple) - pushing proxy rows here would double-count
+    // every proxied call (same LLM calls, two sources).
     const agyProxy = readAgyProxyRows();
+    const cacheEnrichment = new Map<string, CacheEnrichment>();
+    for (const call of agyProxy.calls) {
+      if (!call.conversationId) continue;
+      const key = enrichmentKey(
+        call.conversationId,
+        call.sessionId ?? "",
+        call.outputTokens,
+        call.thinkingTokens ?? 0,
+      );
+      // unique match only: ambiguous generations stay honest zeros
+      if (!cacheEnrichment.has(key)) {
+        cacheEnrichment.set(key, {
+          cacheReadTokens: call.cacheReadTokens,
+          cacheWriteTokens: call.cacheWriteTokens,
+        });
+      }
+    }
+    const antigravity = collectAntigravity(undefined, cacheEnrichment);
+    rows.push(...antigravity.rows);
 
     const sources = providerEntries
       ? this.discoveredSources(providerEntries, rows, antigravity, agyProxy, adapterSources)
