@@ -704,9 +704,10 @@ test("antigravity session resolves from the decoded store when proxy is silent",
   db.exec("CREATE TABLE gen_metadata (idx INTEGER PRIMARY KEY, data BLOB, size INTEGER DEFAULT 0)");
   const blobWithConv = (input: number) => {
     const base = buildGenBlob(input, 5, "gemini-3.8-flash", 1_500, 256_000);
-    // prepend nothing; conversationId path '4' is missing in the synthetic
-    // blob, and the store fallback also accepts null conversationId
-    return base;
+    // Real stores put a run/turn UUID (NOT the conversation UUID) at top-level
+    // field 4 — it must not exclude these generations from the conversation file.
+    const runUuid = new TextEncoder().encode("99999999-aaaa-bbbb-cccc-ddddeeeeeeee");
+    return new Uint8Array([...base, ...lenDelim(4, [...runUuid])]);
   };
   db.prepare("INSERT INTO gen_metadata VALUES (0, ?, 0)").run(Buffer.from(blobWithConv(1_000)));
   db.prepare("INSERT INTO gen_metadata VALUES (1, ?, 0)").run(Buffer.from(blobWithConv(2_000)));

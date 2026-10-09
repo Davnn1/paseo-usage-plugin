@@ -200,9 +200,7 @@ function resolveAntigravityFromStore(
     const candidate = join(dir, `${conversationId}.db`);
     if (!existsSync(candidate)) continue;
     try {
-      generations = scanConversationDb(candidate).generations.filter(
-        (generation) => generation.conversationId === null || generation.conversationId === conversationId,
-      );
+      generations = scanConversationDb(candidate).generations;
       if (generations.length > 0) break;
     } catch {
       /* unreadable store: stay honest */
