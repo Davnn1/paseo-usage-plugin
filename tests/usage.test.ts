@@ -210,7 +210,7 @@ test("mapSourceStatus: antigravity used from store stats, never_used when empty"
   const used = mapSourceStatus({
     provider: { provider: "antigravity", label: "Antigravity", enabled: true },
     backendRows: 0,
-    antigravity: { "antigravity-cli": { sessions: 3, steps: 42, lastModifiedMs: 1 } },
+    antigravity: { "antigravity-cli": { sessions: 3, steps: 42, lastModifiedMs: 1, byModel: new Map() } },
   });
   assert.equal(used.status, "used");
   assert.equal(used.sessions, 3);
@@ -220,7 +220,7 @@ test("mapSourceStatus: antigravity used from store stats, never_used when empty"
   const empty = mapSourceStatus({
     provider: { provider: "antigravity-acp" },
     backendRows: 0,
-    antigravity: { "antigravity-acp": { sessions: 0, steps: 0, lastModifiedMs: 0 } },
+    antigravity: { "antigravity-acp": { sessions: 0, steps: 0, lastModifiedMs: 0, byModel: new Map() } },
   });
   assert.equal(empty.status, "never_used");
   assert.equal(empty.label, "Antigravity (ACP)");
@@ -228,7 +228,7 @@ test("mapSourceStatus: antigravity used from store stats, never_used when empty"
 
 test("mapSourceStatus: never_used for registered providers without rows", () => {
   for (const provider of ["claude", "copilot", "pi", "oh-my-pi", "muse", "kimi", "antigravity-acp"]) {
-    const source = mapSourceStatus({ provider: { provider }, backendRows: 0, antigravity: { "antigravity-acp": { sessions: 0, steps: 0, lastModifiedMs: 0 } } });
+    const source = mapSourceStatus({ provider: { provider }, backendRows: 0, antigravity: { "antigravity-acp": { sessions: 0, steps: 0, lastModifiedMs: 0, byModel: new Map() } } });
     assert.equal(source.status, "never_used", provider);
   }
   const opencode = mapSourceStatus({ provider: { provider: "opencode" }, backendRows: 0 });
@@ -490,7 +490,7 @@ test("buildPillText: no session and no daily → honest placeholder", () => {
 // Antigravity store stats
 // ---------------------------------------------------------------------------
 
-import { collectStats, countSteps, extractConversationId } from "../server/adapters/antigravity";
+import { collectStats, extractConversationId, scanConversationDb } from "../server/adapters/antigravity";
 
 test("extractConversationId parses plain UUID and plugin: JSON", () => {
   assert.equal(extractConversationId("9ba0609a-37ba-47e0-9eb4-3a2776e787d4"), "9ba0609a-37ba-47e0-9eb4-3a2776e787d4");
@@ -514,11 +514,13 @@ test("countSteps and collectStats read a fixture conversations directory", () =>
     db.close();
   }
   writeFileSync(join(dir, "ignore.txt"), "x");
-  assert.equal(countSteps(db1), 3);
-  assert.equal(countSteps(db2), 0);
+  const scan1 = scanConversationDb(db1);
+  assert.equal(scan1.steps, 3);
+  assert.equal(scanConversationDb(db2).steps, 0);
   const stats = collectStats(dir);
   assert.equal(stats?.sessions, 2);
   assert.equal(stats?.steps, 3);
+  assert.equal(stats?.byModel.size, 0); // no gen_metadata table -> no decoded models
   assert.equal(collectStats(join(dir, "missing")), null);
 });
 
@@ -591,7 +593,7 @@ test("mapSourceStatus: antigravity used via proxied calls when store is empty", 
   const source = mapSourceStatus({
     provider: { provider: "antigravity" },
     backendRows: 7,
-    antigravity: { "antigravity-cli": { sessions: 0, steps: 0, lastModifiedMs: 0 } },
+    antigravity: { "antigravity-cli": { sessions: 0, steps: 0, lastModifiedMs: 0, byModel: new Map() } },
     proxyCalls: { "antigravity-cli": 7 },
   });
   assert.equal(source.status, "used");
@@ -774,4 +776,100 @@ test("bucketDaily with a 7d window: 7 gap-filled entries ending today", () => {
   assert.equal(daily[6].inputTokens, 30);
   const active = daily.filter((point) => point.inputTokens > 0).length;
   assert.equal(active, 3);
+});
+
+// ---------------------------------------------------------------------------
+// Protobuf walker + gen_metadata decoding
+// ---------------------------------------------------------------------------
+
+import { decodeGenMetadata } from "../server/adapters/antigravity";
+import { varintAt, walkProtobuf } from "../server/protobuf";
+
+function varintBytes(value: number): number[] {
+  const out: number[] = [];
+  let v = value;
+  do {
+    let b = v % 128;
+    v = Math.floor(v / 128);
+    if (v > 0) b |= 0x80;
+    out.push(b);
+  } while (v > 0);
+  return out;
+}
+
+function tag(field: number, wire: number): number[] {
+  return varintBytes(field * 8 + wire);
+}
+
+function lenDelim(field: number, payload: number[]): number[] {
+  return [...tag(field, 2), ...varintBytes(payload.length), ...payload];
+}
+
+function varintField(field: number, value: number): number[] {
+  return [...tag(field, 0), ...varintBytes(value)];
+}
+
+/** Build a synthetic gen_metadata blob with the same paths as the real store. */
+function buildGenBlob(input: number, output: number, model: string, used: number, max: number): Uint8Array {
+  const usage = [...varintField(1, 1), ...varintField(2, input), ...varintField(3, output)];
+  const context = [...varintField(1, used), ...varintField(4, max)];
+  const inner = [
+    ...varintField(3, 1298),
+    ...lenDelim(4, usage),
+    ...lenDelim(9, lenDelim(10, context)),
+    ...lenDelim(19, [...new TextEncoder().encode(model)]),
+  ];
+  return new Uint8Array(lenDelim(1, inner));
+}
+
+test("protobuf walker decodes synthetic blobs at locked paths", () => {
+  const blob = buildGenBlob(20_000, 260, "gemini-3.8-flash", 21_073, 256_000);
+  const message = walkProtobuf(blob);
+  assert.equal(varintAt(message, "1.4.2"), 20_000);
+  assert.equal(varintAt(message, "1.4.3"), 260);
+  assert.equal(varintAt(message, "1.9.10.1"), 21_073);
+  assert.equal(varintAt(message, "1.9.10.4"), 256_000);
+  assert.equal(walkProtobuf(new Uint8Array([0xff, 0xff])).size, 0); // malformed -> empty, no throw
+});
+
+test("decodeGenMetadata extracts tokens, model, and context", () => {
+  const decoded = decodeGenMetadata(buildGenBlob(12_345, 678, "gemini-3.8-flash", 15_000, 256_000));
+  assert.deepEqual(decoded, {
+    model: "gemini-3.8-flash",
+    inputTokens: 12_345,
+    outputTokens: 678,
+    contextUsed: 15_000,
+    contextMax: 256_000,
+  });
+  // missing model -> null, never invented
+  const noModel = new Uint8Array(lenDelim(1, [...varintField(3, 1), ...lenDelim(4, [...varintField(2, 5), ...varintField(3, 6)])]));
+  assert.equal(decodeGenMetadata(noModel), null);
+  assert.equal(decodeGenMetadata(new Uint8Array([1, 2, 3])), null);
+});
+
+test("scanConversationDb aggregates per model and keeps cache columns honest", () => {
+  const dir = mkdtempSync(join(tmpdir(), "usage-genscan-"));
+  const dbPath = join(dir, "conv1.db");
+  const db = new DatabaseSync(dbPath);
+  db.exec("CREATE TABLE steps (id INTEGER)");
+  db.exec("CREATE TABLE gen_metadata (idx INTEGER PRIMARY KEY, data BLOB, size INTEGER DEFAULT 0)");
+  const insert = db.prepare("INSERT INTO gen_metadata VALUES (?, ?, 0)");
+  insert.run(0, Buffer.from(buildGenBlob(2_000, 74, "gemini-3.8-flash", 2_100, 256_000)));
+  insert.run(1, Buffer.from(buildGenBlob(123_000, 5_500, "gemini-3.8-flash", 130_000, 256_000)));
+  insert.run(2, Buffer.from(buildGenBlob(700, 90, "claude-sonnet-4-6", 800, 200_000)));
+  insert.run(3, Buffer.from(new Uint8Array([9, 9, 9]))); // undecodable row is skipped
+  db.prepare("INSERT INTO steps VALUES (1)").run();
+  db.close();
+
+  const { steps, byModel } = scanConversationDb(dbPath);
+  assert.equal(steps, 1);
+  const flash = byModel.get("gemini-3.8-flash");
+  assert.equal(flash?.inputTokens, 125_000);
+  assert.equal(flash?.outputTokens, 5_574);
+  assert.equal(flash?.generations, 2);
+  assert.equal(flash?.contextUsed, 130_000); // latest gen wins
+  assert.equal(flash?.contextMax, 256_000);
+  const claude = byModel.get("claude-sonnet-4-6");
+  assert.equal(claude?.generations, 1);
+  assert.equal(claude?.inputTokens, 700);
 });

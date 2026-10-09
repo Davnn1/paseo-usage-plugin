@@ -24,6 +24,12 @@ import { backendForProvider, mapSourceStatus } from "./discovery";
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
+function formatTokens(value: number): string {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
+  return String(value);
+}
+
 const PERIOD_WINDOW_DAYS: Record<Period, number | null> = {
   "1d": 1,
   "7d": 7,
@@ -125,6 +131,7 @@ export class UsageAggregator {
     }
 
     const antigravity = collectAntigravity();
+    rows.push(...antigravity.rows);
     const agyProxy = readAgyProxyRows();
     rows.push(...agyProxy.rows);
 
@@ -138,12 +145,23 @@ export class UsageAggregator {
             const backend = `antigravity-${kind}` as const;
             const label = kind === "cli" ? "Antigravity (CLI)" : "Antigravity (ACP)";
             if (stats && stats.sessions > 0) {
+              const decoded = [...stats.byModel.values()].reduce(
+                (sum, totals) => sum + totals.inputTokens + totals.outputTokens,
+                0,
+              );
+              const latestCtx = [...stats.byModel.values()].find((totals) => totals.contextUsed !== null);
               return {
                 backend,
                 label,
                 status: "used",
                 sessions: stats.sessions,
-                detail: `${stats.sessions} sessions · ${stats.steps} steps${calls > 0 ? ` · ${calls} proxied calls` : ""}`,
+                detail:
+                  `${stats.sessions} sessions · ${stats.steps} steps · tokens decoded` +
+                  (decoded > 0 ? ` (${formatTokens(decoded)})` : "") +
+                  (calls > 0 ? ` · ${calls} proxied calls` : "") +
+                  (latestCtx?.contextUsed != null && latestCtx.contextMax
+                    ? ` · ctx ${latestCtx.contextUsed}/${latestCtx.contextMax} latest`
+                    : ""),
               } as SourceStatus;
             }
             if (calls > 0) {

@@ -7,6 +7,12 @@ const ADAPTER_BACKENDS = new Set(["opencode", "codex"]);
 
 const ANTIGRAVITY_BACKENDS = new Set(["antigravity-cli", "antigravity-acp"]);
 
+function formatCompact(value: number): string {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
+  return String(value);
+}
+
 const ANTIGRAVITY_LABELS: Record<string, string> = {
   "antigravity-cli": "Antigravity (CLI)",
   "antigravity-acp": "Antigravity (ACP)",
@@ -65,11 +71,22 @@ export function mapSourceStatus(input: SourceStatusInput): SourceStatus {
     const stats = input.antigravity?.[key];
     const calls = input.proxyCalls?.[key] ?? 0;
     if (stats && stats.sessions > 0) {
+      const decoded = [...stats.byModel.values()].reduce(
+        (sum, totals) => sum + totals.inputTokens + totals.outputTokens,
+        0,
+      );
+      const latestCtx = [...stats.byModel.values()].find((totals) => totals.contextUsed !== null);
       return {
         ...base,
         status: "used",
         sessions: stats.sessions,
-        detail: `${stats.sessions} sessions · ${stats.steps} steps${calls > 0 ? ` · ${calls} proxied calls` : ""}`,
+        detail:
+          `${stats.sessions} sessions · ${stats.steps} steps · tokens decoded` +
+          (decoded > 0 ? ` (${formatCompact(decoded)})` : "") +
+          (calls > 0 ? ` · ${calls} proxied calls` : "") +
+          (latestCtx?.contextUsed != null && latestCtx.contextMax
+            ? ` · ctx ${latestCtx.contextUsed}/${latestCtx.contextMax} latest`
+            : ""),
       };
     }
     if (backendRows > 0 || calls > 0) {

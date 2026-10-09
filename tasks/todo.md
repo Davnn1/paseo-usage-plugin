@@ -140,6 +140,12 @@ Temuan user: pill MUNCUL di mobile (fix icon Gauge terbukti) tapi (a) tap pill t
 
 Acceptance: typecheck pass · test pass (44+ dengan test 7d bucketing baru) · reload → `plugin ls` running ERROR kosong · logs bersih · verify script tak berubah · audit RN 0 hit · commit (`fix:` deskriptif) JANGAN push.
 
+## 13. Antigravity usage + context meter (lanjutan 2026-10-09)
+Strategi: cek dulu jalur TANPA proxy — wire protocol agy bawa token (inputTokens/outputTokens/cache_read_tokens, dari riset bundle Paseo 0.11.1) dan conversation db = SQLite berisi blob protobuf. Pencarian LIKE '%token%' waktu itu TIDAK VALID utk blob protobuf (tanpa nama field).
+1. **Spike decode**: `protoc --decode_raw` (atau walker varint) pada `steps.step_payload`/`metadata`/`gen_metadata`/`executor_metadata` dari `~/.gemini/antigravity-cli/conversations/*.db` (pilih yang steps-nya banyak) + `~/.gemini/antigravity-acp/conversations/*.db`. Cari pola 3-4 varint berdekatan = kandidat (input, output, cache). Cross-check ke jumlah yang masuk akal.
+2. **Recon binary agy**: env support (HTTPS_PROXY / *_BASE_URL / *_ENDPOINT / SSL_CERT_FILE) via strings + lokasi binary.
+3. **Keputusan (2026-10-09, spike SELESAI)**: usage LOKAL BISA DIBACA. Field map `gen_metadata.data` protobuf: **f1.4.2=input_tokens, f1.4.3=output_tokens**, f1.4.5/f1.4.9-10=kumulatif, **f1.19=model**, **f1.9.10={context_used, context_max}** ← meter! Validated 2 ACP db + 1 CLI db. cache_read TIDAK ada di blob (hanya wire frame) → kolom cache = 0/null jujur. **Keputusan: adapter decode protobuf (zero-dep walker) — BUKAN proxy.** Proxy (pola kimi-proxy; binary agy dukung HTTPS_PROXY/SSL_CERT_FILE/GOOGLE_GEMINI_BASE_URL; endpoint aicode.googleapis.com dll.) ditunda opsional — hanya kalau butuh cache_read real-time.
+
 ## Handoff (pindah device)
 - Repo: https://github.com/Davnn1/paseo-usage-plugin.git (branch `main`).
 - Install di mesin baru: `git clone` → `npm install` → cek `pluginsEnabled` di `~/.paseo/config.json` daemon lokal → `paseo plugin install ./usage` **dari parent folder (path RELATIF — path absolut = silent no-op, pitfall terverifikasi)** → `paseo plugin ls` harus `running`, cek kolom ERROR.
