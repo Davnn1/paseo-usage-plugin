@@ -899,7 +899,7 @@ test("decodeGenMetadata extracts tokens, model, and context", () => {
     model: "gemini-3.8-flash",
     inputTokens: 12_345,
     outputTokens: 678,
-    conversationId: null, // synthetic blob has no top-level conversation uuid
+    runId: null, // synthetic blob has no top-level run uuid
     contextUsed: 15_000,
     contextMax: 256_000,
   });

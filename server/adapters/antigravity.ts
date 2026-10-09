@@ -20,7 +20,8 @@ export interface Generation {
   model: string;
   inputTokens: number;
   outputTokens: number;
-  conversationId: string | null;
+  /** Run/trajectory UUID from the blob; the conversation is the db file itself. */
+  runId: string | null;
   contextUsed: number | null;
   contextMax: number | null;
   /** The blob carries no timestamp; the conversation file mtime is the
@@ -75,13 +76,16 @@ export function extractConversationId(sessionId: string): string | null {
  * - 1.4.2  input tokens, 1.4.3 output tokens (per generation)
  * - 1.19   model name (string)
  * - 1.9.10 context occupancy message: field 1 = used, field 4 = max
+ * - 4      run/trajectory UUID for this generation (NOT the conversation id -
+ *          conversation identity comes from the database file name)
  * Returns null when the blob lacks token fields or a model.
  */
 export function decodeGenMetadata(data: Uint8Array): {
   model: string;
   inputTokens: number;
   outputTokens: number;
-  conversationId: string | null;
+  /** Run/trajectory UUID of this generation, distinct from the conversation. */
+  runId: string | null;
   contextUsed: number | null;
   contextMax: number | null;
 } | null {
@@ -90,10 +94,10 @@ export function decodeGenMetadata(data: Uint8Array): {
   const outputTokens = varintAt(message, "1.4.3");
   const model = stringAt(message, "1.19");
   if (inputTokens === null || outputTokens === null || !model) return null;
-  const conversationId = stringAt(message, "4");
+  const runId = stringAt(message, "4");
   const contextUsed = varintAt(message, "1.9.10.1");
   const contextMax = varintAt(message, "1.9.10.4") ?? varintAt(message, "1.9.10.2");
-  return { model, inputTokens, outputTokens, conversationId, contextUsed, contextMax };
+  return { model, inputTokens, outputTokens, runId, contextUsed, contextMax };
 }
 
 /** Count steps and fold every decodable gen_metadata row into totals and generations. */
@@ -136,7 +140,7 @@ export function scanConversationDb(dbPath: string): {
         model: decoded.model,
         inputTokens: decoded.inputTokens,
         outputTokens: decoded.outputTokens,
-        conversationId: decoded.conversationId,
+        runId: decoded.runId,
         contextUsed: decoded.contextUsed,
         contextMax: decoded.contextMax,
         tsMs,
