@@ -473,14 +473,16 @@ function MostActiveAndWeekly({
 }) {
   const barRefs = useRef(new Map<number, View>());
   const [width, setWidth] = useState(0);
+  const [stripHeight, setStripHeight] = useState(0);
   const [cross, setCross] = useState<number | null>(null);
   const maxWeekly = Math.max(1, ...series.weekly.map((point) => point.tokens));
   const mad = series.mostActiveDay;
-  const barHeight = compact ? 42 : 56;
+  const minBarHeight = compact ? 42 : 56;
+  const barHeight = Math.max(minBarHeight, stripHeight - 14);
   const slotWidth = width > 0 ? width / 7 : 0;
 
   return (
-    <View style={{ gap: 10, marginTop: 2 }}>
+    <View style={{ flex: 1, gap: 10, marginTop: 2 }}>
       <View>
         {mad ? (
           <>
@@ -496,8 +498,12 @@ function MostActiveAndWeekly({
         )}
       </View>
       <View
-        onLayout={(event) => setWidth(event.nativeEvent.layout.width)}
-        style={{ flexDirection: "row", alignItems: "flex-end", gap: 6, height: barHeight + 14 }}
+        onLayout={(event) => {
+          setWidth(event.nativeEvent.layout.width);
+          const h = event.nativeEvent.layout.height;
+          setStripHeight((current) => (current === h ? current : h));
+        }}
+        style={{ flex: 1, minHeight: minBarHeight + 14, flexDirection: "row", alignItems: "flex-end", gap: 6 }}
       >
         {WEEKDAY_MON_FIRST.map((weekday) => {
           const point: WeeklyPoint | undefined = series.weekly[weekday];
@@ -585,22 +591,33 @@ function TrendChart({
   compact: boolean;
   tips: TipController;
 }) {
-  const chartHeight = compact ? 64 : 84;
-  const [width, setWidth] = useState(0);
+  const minChartHeight = compact ? 64 : 84;
+  const [size, setSize] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
+  const width = size.width;
+  const chartHeight = Math.max(minChartHeight, size.height);
   const [cross, setCross] = useState<string | null>(null);
   const barRefs = useRef(new Map<string, View>());
 
-  const { maxTokens, maxCost, active } = useMemo(() => {
+  const { maxTokens, maxCost, maxModelTokens, active } = useMemo(() => {
     let maxTokens = 0;
     let maxCost = 0;
+    let maxModelTokens = 0;
     let active = 0;
     for (const point of points) {
       const tokens = point.inputTokens + point.outputTokens;
       if (tokens > maxTokens) maxTokens = tokens;
       if (point.costUsd > maxCost) maxCost = point.costUsd;
+      for (const model of point.models.slice(0, 5)) {
+        if (model.tokens > maxModelTokens) maxModelTokens = model.tokens;
+      }
       if (tokens > 0) active += 1;
     }
-    return { maxTokens: Math.max(1, maxTokens), maxCost: Math.max(0.01, maxCost), active };
+    return {
+      maxTokens: Math.max(1, maxTokens),
+      maxCost: Math.max(0.01, maxCost),
+      maxModelTokens: Math.max(1, maxModelTokens),
+      active,
+    };
   }, [points]);
 
   if (points.length === 0 || active === 0) {
@@ -621,8 +638,26 @@ function TrendChart({
     const outRatio = point.outputTokens / maxTokens;
     const costRatio = point.costUsd / maxCost;
     const hasActivity = point.inputTokens + point.outputTokens > 0;
+    // Per-model overlay dots (top 5), same hash palette as the tooltip dots -
+    // thin markers on the bar's own scale, cost line pattern.
+    const modelDots = point.models.slice(0, 5).map((model) => (
+      <View
+        key={model.model}
+        style={{
+          position: "absolute" as const,
+          left: Math.max(0, exactBarWidth / 2 - 1.5),
+          bottom: Math.round((model.tokens / maxModelTokens) * (chartHeight - 6)),
+          width: 3,
+          height: 3,
+          borderRadius: 1.5,
+          backgroundColor: theme.colors[modelColorIndex(model.model)],
+          opacity: 0.95,
+        }}
+      />
+    ));
     const column = (
       <View style={{ width: exactBarWidth, height: chartHeight, justifyContent: "flex-end" }}>
+        {modelDots}
         <View
           style={{
             position: "absolute" as const,
@@ -710,13 +745,35 @@ function TrendChart({
 
   if (width <= 0) {
     return (
-      <View onLayout={(event) => setWidth(event.nativeEvent.layout.width)} style={{ height: chartHeight }} />
+      <View
+        style={{ flex: 1, minHeight: minChartHeight }}
+        onLayout={(event) => {
+          const { width: w, height: h } = event.nativeEvent.layout;
+          setSize((current) => (current.width === w && current.height === h ? current : { width: w, height: h }));
+        }}
+      />
     );
   }
 
+  const topModels = (() => {
+    const totals = new Map<string, number>();
+    for (const point of points) {
+      for (const model of point.models.slice(0, 5)) {
+        totals.set(model.model, (totals.get(model.model) ?? 0) + model.tokens);
+      }
+    }
+    return [...totals.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+  })();
+
   return (
-    <View style={{ gap: 6 }}>
-      <View onLayout={(event) => setWidth(event.nativeEvent.layout.width)}>
+    <View style={{ flex: 1, gap: 6 }}>
+      <View
+        style={{ flex: 1, minHeight: minChartHeight }}
+        onLayout={(event) => {
+          const { width: w, height: h } = event.nativeEvent.layout;
+          setSize((current) => (current.width === w && current.height === h ? current : { width: w, height: h }));
+        }}
+      >
         {scroll ? (
           <ScrollView horizontal showsHorizontalScrollIndicator style={{ height: chartHeight }}>
             {inner}
@@ -725,10 +782,13 @@ function TrendChart({
           inner
         )}
       </View>
-      <View style={{ flexDirection: "row", gap: 12 }}>
+      <View style={{ flexDirection: "row", gap: 12, flexWrap: "wrap" as const }}>
         <Legend color={theme.colors.statusSuccess} label="Input" theme={theme} />
         <Legend color={theme.colors.accent} label="Output" theme={theme} />
         <Legend color={theme.colors.statusWarning} label="Cost" theme={theme} />
+        {topModels.map(([model]) => (
+          <Legend key={model} color={theme.colors[modelColorIndex(model)]} label={model} theme={theme} />
+        ))}
       </View>
     </View>
   );
