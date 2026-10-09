@@ -1,7 +1,7 @@
 import { useRpc } from "@getpaseo/plugin/client";
 import type { PluginScreenProps } from "@getpaseo/plugin/client";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Pressable, RefreshControl, ScrollView, Text, TextInput, View } from "react-native";
 import { Dashboard } from "./dashboard";
 import { localDateKey, startOfLocalDay, usageDashboardRpc, usageRefreshRpc, usageSummaryRpc, type Period, type UsageEntry, type UsageSummaryOutput } from "../shared/usage";
@@ -73,6 +73,7 @@ export function UsageScreen({ theme, layout, host }: PluginScreenProps) {
   const [appliedCustom, setAppliedCustom] = useState<{ startDate: string; endDate: string } | null>(null);
   const [showDisabled, setShowDisabled] = useState(false);
   const [tableWidth, setTableWidth] = useState(0);
+  const dismissDashboardRef = useRef<(() => void) | null>(null);
 
   const range: { startDate?: string; endDate?: string } | undefined =
     mode === "week"
@@ -267,6 +268,7 @@ export function UsageScreen({ theme, layout, host }: PluginScreenProps) {
     <View style={styles.screen}>
       <ScrollView
         contentContainerStyle={styles.content}
+        onScrollBeginDrag={() => dismissDashboardRef.current?.()}
         refreshControl={
           <RefreshControl
             refreshing={refresh.isPending}
@@ -386,7 +388,15 @@ export function UsageScreen({ theme, layout, host }: PluginScreenProps) {
                 </Pressable>
               </View>
             ) : dashboardQuery.data ? (
-              <Dashboard data={dashboardQuery.data} theme={theme} layout={layout} host={host} />
+              <Dashboard
+                data={dashboardQuery.data}
+                theme={theme}
+                layout={layout}
+                host={host}
+                registerDismiss={(dismiss) => {
+                  dismissDashboardRef.current = dismiss;
+                }}
+              />
             ) : (
               <Text style={styles.message}>Loading dashboard…</Text>
             )}

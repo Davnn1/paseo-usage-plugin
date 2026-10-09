@@ -124,8 +124,11 @@ export function Dashboard({
   data,
   theme,
   layout,
+  registerDismiss,
 }: {
   data: UsageDashboardOutput;
+  /** Optional hook so an outer ScrollView can dismiss tips on scroll. */
+  registerDismiss?: (dismiss: () => void) => void;
 } & PluginHostProps) {
   const compact = layout.compact;
   const [tip, setTip] = useState<TipState | null>(null);
@@ -136,6 +139,11 @@ export function Dashboard({
     setTip(null);
     for (const listener of dismissListeners.current) listener();
   };
+  const dismissRef = useRef(dismissAll);
+  dismissRef.current = dismissAll;
+  useEffect(() => {
+    registerDismiss?.(() => dismissRef.current());
+  }, [registerDismiss]);
   const [rootWidth, setRootWidth] = useState(0);
   const [rootHeight, setRootHeight] = useState(0);
   const rootRef = useRef<View | null>(null);
