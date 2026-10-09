@@ -1,5 +1,5 @@
 import type { PluginHostProps } from "@getpaseo/plugin/client";
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import {
   dailyTokens,
@@ -11,6 +11,56 @@ import {
 } from "../shared/usage";
 
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+interface LinePoint {
+  index: number;
+  value: number;
+}
+
+/**
+ * Connect daily points with thin rotated segments (RN has no svg): each
+ * segment is centered on its midpoint so the default center transform
+ * origin lands both endpoints exactly on adjacent day points.
+ */
+function connectedSegments(
+  values: LinePoint[],
+  toY: (value: number) => number,
+  slotWidth: number,
+  color: string,
+  keyPrefix: string,
+): ReactNode[] {
+  const out: React.ReactNode[] = [];
+  for (let i = 0; i < values.length - 1; i += 1) {
+    const a = values[i];
+    const b = values[i + 1];
+    if (a.value <= 0 && b.value <= 0) continue;
+    const ax = a.index * slotWidth + slotWidth / 2;
+    const bx = b.index * slotWidth + slotWidth / 2;
+    const ay = toY(a.value);
+    const by = toY(b.value);
+    const dx = bx - ax;
+    const dy = by - ay;
+    const len = Math.sqrt(dx * dx + dy * dy);
+    if (len < 1) continue;
+    const angle = Math.atan2(dy, dx);
+    out.push(
+      <View
+        key={`${keyPrefix}-${i}`}
+        style={{
+          position: "absolute" as const,
+          left: (ax + bx) / 2 - len / 2,
+          top: (ay + by) / 2 - 0.75,
+          width: len,
+          height: 1.5,
+          borderRadius: 1,
+          backgroundColor: color,
+          transform: [{ rotate: `${angle}rad` }],
+        }}
+      />,
+    );
+  }
+  return out;
+}
 
 /** Stable palette slot for a model name so its dot color never changes. */
 function modelColorIndex(model: string): PaletteKey {
@@ -268,13 +318,6 @@ function stylesCard(theme: PluginHostProps["theme"], compact: boolean) {
   };
 }
 
-/** Dashed vertical crosshair segments (RN has no stroke dash without svg). */
-function crosshairSegments(theme: PluginHostProps["theme"], height: number, keyPrefix: string) {
-  return Array.from({ length: Math.floor(height / 5) }, (_, i) => (
-    <View key={`${keyPrefix}-${i}`} style={{ width: 1, height: 3, backgroundColor: theme.colors.foregroundMuted }} />
-  ));
-}
-
 function stylesCardTitle(theme: PluginHostProps["theme"]) {
   return {
     color: theme.colors.foregroundMuted,
@@ -473,14 +516,14 @@ function MostActiveAndWeekly({
 }) {
   const barRefs = useRef(new Map<number, View>());
   const [width, setWidth] = useState(0);
-  const [stripHeight, setStripHeight] = useState(0);
   const [cross, setCross] = useState<number | null>(null);
   const maxWeekly = Math.max(1, ...series.weekly.map((point) => point.tokens));
   const mad = series.mostActiveDay;
-  const minBarHeight = compact ? 42 : 56;
-  const barHeight = Math.max(minBarHeight, stripHeight - 14);
   const slotWidth = width > 0 ? width / 7 : 0;
 
+  // Percentage-based geometry: the plot area height comes from the flex
+  // chain (stretched card), never from measured content - so the bars cannot
+  // feed back into their own container height.
   return (
     <View style={{ flex: 1, gap: 10, marginTop: 2 }}>
       <View>
@@ -497,25 +540,21 @@ function MostActiveAndWeekly({
           <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>No usage in this period.</Text>
         )}
       </View>
-      <View
-        onLayout={(event) => {
-          setWidth(event.nativeEvent.layout.width);
-          const h = event.nativeEvent.layout.height;
-          setStripHeight((current) => (current === h ? current : h));
-        }}
-        style={{ flex: 1, minHeight: minBarHeight + 14, flexDirection: "row", alignItems: "flex-end", gap: 6 }}
-      >
-        {WEEKDAY_MON_FIRST.map((weekday) => {
-          const point: WeeklyPoint | undefined = series.weekly[weekday];
-          const ratio = point ? point.tokens / maxWeekly : 0;
-          const inH = point ? Math.round((point.inputTokens / maxWeekly) * barHeight) : 0;
-          const outH = point ? Math.max(0, Math.round(ratio * barHeight) - inH) : 0;
-          const bar = (
-            <View style={{ width: "100%", opacity: point && point.tokens > 0 ? 1 : 0.15, gap: 0 }}>
-              <View style={{ height: Math.max(2, inH), borderTopLeftRadius: 3, borderTopRightRadius: 3, backgroundColor: theme.colors.statusSuccess }} />
-              <View style={{ height: outH, backgroundColor: theme.colors.accent }} />
-            </View>
-          );
+      <View style={{ flex: 1, minHeight: compact ? 56 : 72, flexDirection: "column", gap: 4 }}>
+        <View
+          onLayout={(event) => setWidth(event.nativeEvent.layout.width)}
+          style={{ flex: 1, flexDirection: "row", alignItems: "stretch", gap: 6 }}
+        >
+          {WEEKDAY_MON_FIRST.map((weekday) => {
+            const point: WeeklyPoint | undefined = series.weekly[weekday];
+            const inPct = point ? (point.inputTokens / maxWeekly) * 100 : 0;
+            const outPct = point ? (point.outputTokens / maxWeekly) * 100 : 0;
+            const bar = (
+              <View style={{ width: "100%", height: "100%", justifyContent: "flex-end", opacity: point && point.tokens > 0 ? 1 : 0.15 }}>
+                <View style={{ height: `${inPct}%`, minHeight: point && point.inputTokens > 0 ? 2 : 0, borderTopLeftRadius: 3, borderTopRightRadius: 3, backgroundColor: theme.colors.statusSuccess }} />
+                <View style={{ height: `${outPct}%`, backgroundColor: theme.colors.accent }} />
+              </View>
+            );
           return (
             <View key={weekday} style={{ flex: 1, alignItems: "center", gap: 3 }}>
               {point && point.tokens > 0 ? (
@@ -550,10 +589,7 @@ function MostActiveAndWeekly({
               ) : (
                 bar
               )}
-              <Text style={{ color: theme.colors.foregroundMuted, fontSize: 9 }}>
-                {WEEKDAY_SHORT[weekday].slice(0, 2)}
-              </Text>
-            </View>
+          </View>
           );
         })}
         {cross !== null && width > 0 ? (
@@ -562,15 +598,25 @@ function MostActiveAndWeekly({
             style={{
               position: "absolute",
               top: 0,
-              height: barHeight,
+              bottom: 0,
               left: WEEKDAY_MON_FIRST.indexOf(cross) * slotWidth + slotWidth / 2,
               width: 0,
-              gap: 2,
+              borderLeftWidth: 1,
+              borderLeftColor: theme.colors.foregroundMuted,
+              borderStyle: "dashed",
             }}
-          >
-            {crosshairSegments(theme, barHeight, "weekly")}
-          </View>
+          />
         ) : null}
+        </View>
+        <View style={{ flexDirection: "row", gap: 6, height: 12 }}>
+          {WEEKDAY_MON_FIRST.map((weekday) => (
+            <View key={weekday} style={{ flex: 1, alignItems: "center" }}>
+              <Text style={{ color: theme.colors.foregroundMuted, fontSize: 9 }}>
+                {WEEKDAY_SHORT[weekday].slice(0, 2)}
+              </Text>
+            </View>
+          ))}
+        </View>
       </View>
     </View>
   );
@@ -638,26 +684,8 @@ function TrendChart({
     const outRatio = point.outputTokens / maxTokens;
     const costRatio = point.costUsd / maxCost;
     const hasActivity = point.inputTokens + point.outputTokens > 0;
-    // Per-model overlay dots (top 5), same hash palette as the tooltip dots -
-    // thin markers on the bar's own scale, cost line pattern.
-    const modelDots = point.models.slice(0, 5).map((model) => (
-      <View
-        key={model.model}
-        style={{
-          position: "absolute" as const,
-          left: Math.max(0, exactBarWidth / 2 - 1.5),
-          bottom: Math.round((model.tokens / maxModelTokens) * (chartHeight - 6)),
-          width: 3,
-          height: 3,
-          borderRadius: 1.5,
-          backgroundColor: theme.colors[modelColorIndex(model.model)],
-          opacity: 0.95,
-        }}
-      />
-    ));
     const column = (
       <View style={{ width: exactBarWidth, height: chartHeight, justifyContent: "flex-end" }}>
-        {modelDots}
         <View
           style={{
             position: "absolute" as const,
@@ -715,6 +743,58 @@ function TrendChart({
 
   const crossIndex = cross ? points.findIndex((point) => point.date === cross) : -1;
 
+  // Connected line overlays (top-down coordinates): per-model lines in the
+  // tooltip hash palette, plus the cost line - thin, bars stay dominant.
+  const modelY = (value: number) => chartHeight - 6 - (value / maxModelTokens) * (chartHeight - 6);
+  const costY = (value: number) => chartHeight - 6 - (value / maxCost) * (chartHeight - 6);
+  const topModelNames = (() => {
+    const totals = new Map<string, number>();
+    for (const point of points) {
+      for (const model of point.models.slice(0, 5)) {
+        totals.set(model.model, (totals.get(model.model) ?? 0) + model.tokens);
+      }
+    }
+    return [...totals.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([model]) => model);
+  })();
+  const lineOverlay = (
+    <View pointerEvents="none" style={{ position: "absolute", top: 0, left: 0, width: Math.max(1, contentWidth), height: chartHeight }}>
+      {topModelNames.map((model) => {
+        const values: LinePoint[] = points.map((point, index) => ({
+          index,
+          value: point.models.find((entry) => entry.model === model)?.tokens ?? 0,
+        }));
+        return (
+          <View key={model}>
+            {connectedSegments(values, modelY, slotWidth, theme.colors[modelColorIndex(model)], `ml-${model}`)}
+            {values
+              .filter((entry) => entry.value > 0)
+              .map((entry) => (
+                <View
+                  key={`${model}-${entry.index}`}
+                  style={{
+                    position: "absolute" as const,
+                    left: entry.index * slotWidth + slotWidth / 2 - 1.5,
+                    top: modelY(entry.value) - 1.5,
+                    width: 3,
+                    height: 3,
+                    borderRadius: 1.5,
+                    backgroundColor: theme.colors[modelColorIndex(model)],
+                  }}
+                />
+              ))}
+          </View>
+        );
+      })}
+      {connectedSegments(
+        points.map((point, index) => ({ index, value: point.costUsd })),
+        costY,
+        slotWidth,
+        theme.colors.statusWarning,
+        "cost-line",
+      )}
+    </View>
+  );
+
   const inner = (
     <View
       style={{
@@ -725,20 +805,21 @@ function TrendChart({
       }}
     >
       {points.map((point) => renderBar(point))}
+      {lineOverlay}
       {crossIndex >= 0 ? (
         <View
           pointerEvents="none"
           style={{
             position: "absolute",
             top: 0,
-            height: chartHeight,
+            bottom: 0,
             left: crossIndex * slotWidth + slotWidth / 2,
             width: 0,
-            gap: 2,
+            borderLeftWidth: 1,
+            borderLeftColor: theme.colors.foregroundMuted,
+            borderStyle: "dashed",
           }}
-        >
-          {crosshairSegments(theme, chartHeight, "trend")}
-        </View>
+        />
       ) : null}
     </View>
   );
