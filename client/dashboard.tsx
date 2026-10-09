@@ -213,6 +213,18 @@ interface TipRow {
 }
 
 function weeklyTip(weekday: number, point: WeeklyPoint, peakDate: string | null): TipData {
+  return {
+    title: peakDate ? `${WEEKDAY_SHORT[weekday]} · peak ${peakDate}` : WEEKDAY_SHORT[weekday],
+    total: `${formatTokens(point.tokens)} tokens (cumulative)`,
+    rows: [
+      { label: "Input", value: formatTokens(point.inputTokens) },
+      { label: "Output", value: formatTokens(point.outputTokens) },
+      { label: "Cost", value: `$${point.costUsd.toFixed(2)}` },
+    ],
+  };
+}
+
+function dailyTip(point: DailyPoint): TipData {
   const rows: TipRow[] = point.models.slice(0, 6).map((model) => ({
     label: model.model,
     value: formatTokens(model.tokens),
@@ -221,26 +233,13 @@ function weeklyTip(weekday: number, point: WeeklyPoint, peakDate: string | null)
   rows.push(
     { label: "Input", value: formatTokens(point.inputTokens) },
     { label: "Output", value: formatTokens(point.outputTokens) },
+    { label: "Cache Read", value: formatTokens(point.cacheReadTokens) },
     { label: "Cost", value: `$${point.costUsd.toFixed(2)}` },
   );
   return {
-    title: peakDate ? `${WEEKDAY_SHORT[weekday]} · peak ${peakDate}` : WEEKDAY_SHORT[weekday],
-    total: `${formatTokens(point.tokens)} tokens (cumulative)`,
-    rows,
-  };
-}
-
-function dailyTip(point: DailyPoint): TipData {
-  return {
     title: point.date,
-    total: `${formatTokens(dailyTokens(point))} tokens`,
-    rows: [
-      { label: "Input", value: formatTokens(point.inputTokens) },
-      { label: "Output", value: formatTokens(point.outputTokens) },
-      { label: "Cache Read", value: formatTokens(point.cacheReadTokens) },
-      { label: "Cost", value: `$${point.costUsd.toFixed(2)}` },
-      { label: "Sessions", value: String(point.sessions) },
-    ],
+    total: `${formatTokens(dailyTokens(point))} tokens · ${point.sessions} sessions`,
+    rows,
   };
 }
 
