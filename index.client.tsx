@@ -1,7 +1,7 @@
 import type { PluginButtonContentProps, PluginButtonRegistration, PluginClientContext } from "@getpaseo/plugin/client";
 import type { PluginSidebarItemProps } from "@getpaseo/plugin/client";
 import { SidebarRow } from "@getpaseo/plugin/client/ui";
-import { Text, View } from "react-native";
+import { Platform, Text, View } from "react-native";
 import { UsageScreen } from "./client/usage-screen";
 import { buildPillText, usageSessionSummaryRpc, usageSummaryRpc, type SessionSummaryOutput, type UsageTotals } from "./shared/usage";
 
@@ -266,7 +266,11 @@ function contributeUsagePill(client: PluginClientContext) {
 export default function contribute(client: PluginClientContext) {
   const cleanups: (() => void)[] = [];
   cleanups.push(safeCleanup("screen", () => client.addScreen({ id: "usage", title: "Monitoring", Component: UsageScreen })));
-  cleanups.push(safeCleanup("sidebar-header", () => client.addSidebarHeaderItem({ id: "usage", title: "Monitoring", Component: SafeUsageItem })));
+  // Sidebar entries are a desktop affordance; mobile reaches Monitoring via
+  // Search, so gate the registration away from ios/android hosts.
+  if (Platform.OS !== "ios" && Platform.OS !== "android") {
+    cleanups.push(safeCleanup("sidebar-header", () => client.addSidebarHeaderItem({ id: "usage", title: "Monitoring", Component: SafeUsageItem })));
+  }
   cleanups.push(
     safeCleanup("command-center", () =>
       client.addCommandCenterItem({
