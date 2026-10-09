@@ -1,5 +1,5 @@
 import type { PluginHostProps } from "@getpaseo/plugin/client";
-import { useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import {
   dailyTokens,
@@ -107,6 +107,10 @@ interface TipController {
   show: (key: string, anchor: TipAnchor | null, data: TipData) => void;
   hide: (key: string) => void;
   toggle: (key: string, anchor: TipAnchor | null, data: TipData) => void;
+  /** Dismiss the tooltip and every crosshair (outside tap / scroll). */
+  dismiss: () => void;
+  /** Subscribe to global dismissals (outside tap / scroll); returns unsubscribe. */
+  onDismiss: (callback: () => void) => () => void;
 }
 
 const TIP_WIDTH = 172;
@@ -127,6 +131,11 @@ export function Dashboard({
   const [tip, setTip] = useState<TipState | null>(null);
   const tipRef = useRef<TipState | null>(null);
   tipRef.current = tip;
+  const dismissListeners = useRef(new Set<() => void>());
+  const dismissAll = () => {
+    setTip(null);
+    for (const listener of dismissListeners.current) listener();
+  };
   const [rootWidth, setRootWidth] = useState(0);
   const [rootHeight, setRootHeight] = useState(0);
   const rootRef = useRef<View | null>(null);
@@ -159,10 +168,17 @@ export function Dashboard({
       hide: (key) => setTip((current) => (current && current.key === key ? null : current)),
       toggle: (key, anchor, tipData) => {
         if (tipRef.current?.key === key) {
-          setTip(null);
+          dismissAll();
         } else {
           place(key, anchor, tipData);
         }
+      },
+      dismiss: () => dismissAll(),
+      onDismiss: (callback) => {
+        dismissListeners.current.add(callback);
+        return () => {
+          dismissListeners.current.delete(callback);
+        };
       },
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -177,10 +193,12 @@ export function Dashboard({
   const tipLift = tip === null ? 0 : tip.y + 10 + TIP_HEIGHT_EST > rootHeight ? -(TIP_HEIGHT_EST + 20) : 0;
 
   return (
-    <View
+    <Pressable
       ref={(node) => {
-        rootRef.current = node;
+        rootRef.current = node as unknown as View | null;
       }}
+      accessibilityRole="none"
+      onPress={dismissAll}
       style={stylesGrid(compact)}
       onLayout={(event) => {
         setRootWidth(event.nativeEvent.layout.width);
@@ -249,7 +267,7 @@ export function Dashboard({
           ))}
         </View>
       ) : null}
-    </View>
+    </Pressable>
   );
 }
 
@@ -407,7 +425,7 @@ function Heatmap({
       <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11, marginTop: 2, marginBottom: 2 }}>
         {`${activeDays} active days · ${formatTokens(totalTokens)} tokens · 365 days`}
       </Text>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} onScrollBeginDrag={() => tips.dismiss()}>
         <View style={{ gap }}>
           <View style={{ flexDirection: "row", marginLeft: labelWidth + gap, height: 12 }}>
             {monthLabels.map((label) => (
@@ -517,6 +535,7 @@ function MostActiveAndWeekly({
   const barRefs = useRef(new Map<number, View>());
   const [width, setWidth] = useState(0);
   const [cross, setCross] = useState<number | null>(null);
+  useEffect(() => tips.onDismiss(() => setCross(null)), [tips]);
   const maxWeekly = Math.max(1, ...series.weekly.map((point) => point.tokens));
   const mad = series.mostActiveDay;
   const slotWidth = width > 0 ? width / 7 : 0;
@@ -643,6 +662,7 @@ function TrendChart({
   const chartHeight = Math.max(minChartHeight, size.height);
   const [cross, setCross] = useState<string | null>(null);
   const barRefs = useRef(new Map<string, View>());
+  useEffect(() => tips.onDismiss(() => setCross(null)), [tips]);
 
   const { maxTokens, maxCost, maxModelTokens, active } = useMemo(() => {
     let maxTokens = 0;
@@ -856,7 +876,12 @@ function TrendChart({
         }}
       >
         {scroll ? (
-          <ScrollView horizontal showsHorizontalScrollIndicator style={{ height: chartHeight }}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator
+            style={{ height: chartHeight }}
+            onScrollBeginDrag={() => tips.dismiss()}
+          >
             {inner}
           </ScrollView>
         ) : (
