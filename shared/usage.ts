@@ -4,10 +4,10 @@ import { z } from "zod";
 export const periodSchema = z.enum(["1d", "7d", "30d", "all"]);
 export type Period = z.infer<typeof periodSchema>;
 
-export const PERIOD_MS: Record<Exclude<Period, "all">, number> = {
-  "1d": 24 * 60 * 60 * 1000,
-  "7d": 7 * 24 * 60 * 60 * 1000,
-  "30d": 30 * 24 * 60 * 60 * 1000,
+const PERIOD_DAYS: Record<Exclude<Period, "all">, number> = {
+  "1d": 1,
+  "7d": 7,
+  "30d": 30,
 };
 
 /** One session-shaped usage record produced by exactly one adapter. */
@@ -349,10 +349,14 @@ export function cacheHitRatio(cacheReadTokens: number, inputTokens: number): num
   return denom > 0 ? cacheReadTokens / denom : 0;
 }
 
-/** Keep rows whose timestamp falls inside the period window ending at nowMs. "all" keeps everything. */
+/**
+ * Keep rows whose UTC calendar day falls inside the period ending today, so
+ * the sliding filter and the daily bucketing cover exactly the same days
+ * (sum of daily points equals totals for every period).
+ */
 export function filterPeriod(rows: UsageRow[], period: Period, nowMs: number): UsageRow[] {
   if (period === "all") return rows;
-  const cutoff = nowMs - PERIOD_MS[period];
+  const cutoff = dayStartUtc(nowMs) - (PERIOD_DAYS[period] - 1) * DAY_MS;
   return rows.filter((row) => row.timestampMs >= cutoff);
 }
 

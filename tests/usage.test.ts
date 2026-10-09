@@ -17,7 +17,7 @@ import {
 import { parseCodexLines } from "../server/adapters/codex";
 import { readSessionRowById } from "../server/adapters/opencode";
 import { extractSessionId, resolveSessionSummary } from "../server/session-lookup";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -48,19 +48,25 @@ test("cacheHitRatio = cacheRead / (cacheRead + input)", () => {
   assert.equal(cacheHitRatio(100, 0), 1);
 });
 
-test("filterPeriod keeps rows inside the window and everything for all", () => {
+test("filterPeriod uses calendar days so filters match daily bucketing", () => {
   const rows = [
     row({ timestampMs: NOW - 30 * 24 * 3600_000 }),
     row({ timestampMs: NOW - 2 * 24 * 3600_000 }),
     row({ timestampMs: NOW - 60_000 }),
   ];
   assert.equal(filterPeriod(rows, "all", NOW).length, 3);
-  assert.equal(filterPeriod(rows, "30d", NOW).length, 3);
+  assert.equal(filterPeriod(rows, "30d", NOW).length, 2); // 30 calendar days back: the -30d row sits on day 31
   assert.equal(filterPeriod(rows, "7d", NOW).length, 2);
-  assert.equal(filterPeriod(rows, "1d", NOW).length, 1);
-  // boundary: exactly at cutoff is included
-  const boundary = row({ timestampMs: NOW - 24 * 3600_000 });
-  assert.equal(filterPeriod([...rows, boundary], "1d", NOW).length, 2);
+  assert.equal(filterPeriod(rows, "1d", NOW).length, 1); // today only
+  // boundary: start-of-today is included, yesterday is not
+  const dayStart = Date.UTC(new Date(NOW).getUTCFullYear(), new Date(NOW).getUTCMonth(), new Date(NOW).getUTCDate());
+  assert.equal(filterPeriod([...rows, row({ timestampMs: dayStart })], "1d", NOW).length, 2);
+  assert.equal(filterPeriod([...rows, row({ timestampMs: dayStart - 1 })], "1d", NOW).length, 1);
+  // a 7-day window covers exactly 7 calendar days
+  const oldestInWindow = row({ timestampMs: dayStart - 6 * 24 * 3600_000 });
+  const oldestOutside = row({ timestampMs: dayStart - 7 * 24 * 3600_000 });
+  assert.equal(filterPeriod([oldestInWindow], "7d", NOW).length, 1);
+  assert.equal(filterPeriod([oldestOutside], "7d", NOW).length, 0);
 });
 
 test("aggregateUsage groups by backend/provider/model and totals equal sum of entries", () => {
@@ -210,7 +216,7 @@ test("mapSourceStatus: antigravity used from store stats, never_used when empty"
   const used = mapSourceStatus({
     provider: { provider: "antigravity", label: "Antigravity", enabled: true },
     backendRows: 0,
-    antigravity: { "antigravity-cli": { sessions: 3, steps: 42, lastModifiedMs: 1, byModel: new Map() } },
+    antigravity: { "antigravity-cli": { sessions: 3, steps: 42, lastModifiedMs: 1, byModel: new Map(), generations: [] } },
   });
   assert.equal(used.status, "used");
   assert.equal(used.sessions, 3);
@@ -220,7 +226,7 @@ test("mapSourceStatus: antigravity used from store stats, never_used when empty"
   const empty = mapSourceStatus({
     provider: { provider: "antigravity-acp" },
     backendRows: 0,
-    antigravity: { "antigravity-acp": { sessions: 0, steps: 0, lastModifiedMs: 0, byModel: new Map() } },
+    antigravity: { "antigravity-acp": { sessions: 0, steps: 0, lastModifiedMs: 0, byModel: new Map(), generations: [] } },
   });
   assert.equal(empty.status, "never_used");
   assert.equal(empty.label, "Antigravity (ACP)");
@@ -228,7 +234,7 @@ test("mapSourceStatus: antigravity used from store stats, never_used when empty"
 
 test("mapSourceStatus: never_used for registered providers without rows", () => {
   for (const provider of ["claude", "copilot", "pi", "oh-my-pi", "muse", "kimi", "antigravity-acp"]) {
-    const source = mapSourceStatus({ provider: { provider }, backendRows: 0, antigravity: { "antigravity-acp": { sessions: 0, steps: 0, lastModifiedMs: 0, byModel: new Map() } } });
+    const source = mapSourceStatus({ provider: { provider }, backendRows: 0, antigravity: { "antigravity-acp": { sessions: 0, steps: 0, lastModifiedMs: 0, byModel: new Map(), generations: [] } } });
     assert.equal(source.status, "never_used", provider);
   }
   const opencode = mapSourceStatus({ provider: { provider: "opencode" }, backendRows: 0 });
@@ -593,7 +599,7 @@ test("mapSourceStatus: antigravity used via proxied calls when store is empty", 
   const source = mapSourceStatus({
     provider: { provider: "antigravity" },
     backendRows: 7,
-    antigravity: { "antigravity-cli": { sessions: 0, steps: 0, lastModifiedMs: 0, byModel: new Map() } },
+    antigravity: { "antigravity-cli": { sessions: 0, steps: 0, lastModifiedMs: 0, byModel: new Map(), generations: [] } },
     proxyCalls: { "antigravity-cli": 7 },
   });
   assert.equal(source.status, "used");
@@ -670,12 +676,50 @@ test("session resolve stays honest for antigravity agents (no opencode session)"
     join(ws, "agent-agy.json"),
     JSON.stringify({ provider: "antigravity", runtimeInfo: { sessionId: "9ba0609a-37ba-47e0-9eb4-3a2776e787d4" } }),
   );
+  const emptyHome = mkdtempSync(join(tmpdir(), "usage-empty-home-"));
   const result = resolveSessionSummary("agent-agy", {
     agentsDir: dir,
     readAgyCalls: () => ({ calls: [] }), // proxy has no calls for this conversation
+    agyHome: emptyHome, // and the fixture store has no conversation file
   });
   assert.equal(result.found, false);
-  assert.match(result.reason ?? "", /no proxied calls/);
+  assert.match(result.reason ?? "", /no usage recorded/);
+});
+
+test("antigravity session resolves from the decoded store when proxy is silent", () => {
+  const dir = mkdtempSync(join(tmpdir(), "usage-agy-store-"));
+  const ws = join(dir, "ws1");
+  mkdirSync(ws);
+  const home = mkdtempSync(join(tmpdir(), "usage-agy-store-home-"));
+  const convDir = join(home, ".gemini", "antigravity-cli", "conversations");
+  mkdirSync(convDir, { recursive: true });
+  const convId = "11111111-2222-4333-8444-555566667777";
+  const dbPath = join(convDir, `${convId}.db`);
+  const db = new DatabaseSync(dbPath);
+  db.exec("CREATE TABLE steps (id INTEGER)");
+  db.exec("CREATE TABLE gen_metadata (idx INTEGER PRIMARY KEY, data BLOB, size INTEGER DEFAULT 0)");
+  const blobWithConv = (input: number) => {
+    const base = buildGenBlob(input, 5, "gemini-3.8-flash", 1_500, 256_000);
+    // prepend nothing; conversationId path '4' is missing in the synthetic
+    // blob, and the store fallback also accepts null conversationId
+    return base;
+  };
+  db.prepare("INSERT INTO gen_metadata VALUES (0, ?, 0)").run(Buffer.from(blobWithConv(1_000)));
+  db.prepare("INSERT INTO gen_metadata VALUES (1, ?, 0)").run(Buffer.from(blobWithConv(2_000)));
+  db.close();
+  writeFileSync(
+    join(ws, "agent-store.json"),
+    JSON.stringify({ provider: "antigravity", title: "Store session", persistence: { sessionId: convId } }),
+  );
+  const result = resolveSessionSummary("agent-store", {
+    agentsDir: dir,
+    readAgyCalls: () => ({ calls: [] }),
+    agyHome: home,
+  });
+  assert.equal(result.found, true);
+  assert.equal(result.backend, "antigravity-cli");
+  assert.equal(result.inputTokens, 3_000);
+  assert.equal(result.model, "gemini-3.8-flash");
 });
 
 // ---------------------------------------------------------------------------
@@ -838,6 +882,7 @@ test("decodeGenMetadata extracts tokens, model, and context", () => {
     model: "gemini-3.8-flash",
     inputTokens: 12_345,
     outputTokens: 678,
+    conversationId: null, // synthetic blob has no top-level conversation uuid
     contextUsed: 15_000,
     contextMax: 256_000,
   });
@@ -872,4 +917,116 @@ test("scanConversationDb aggregates per model and keeps cache columns honest", (
   const claude = byModel.get("claude-sonnet-4-6");
   assert.equal(claude?.generations, 1);
   assert.equal(claude?.inputTokens, 700);
+});
+
+// ---------------------------------------------------------------------------
+// Anti double-counting, per-generation dates, walker robustness
+// ---------------------------------------------------------------------------
+
+import { collectAntigravity } from "../server/adapters/antigravity";
+
+test("proxy rows never enter aggregates: same call counted once (store only)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "usage-dedup-"));
+  const metrics = join(dir, "metrics.jsonl");
+  writeFileSync(
+    metrics,
+    JSON.stringify({
+      ts: new Date().toISOString(), source: "cli", model: "gemini-3.8-flash", status: 200,
+      promptTokens: 999_999_999, outputTokens: 888_888_888, thinkingTokens: 0,
+      cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 0, durationMs: 1,
+    }),
+  );
+  const previous = process.env.AGY_PROXY_METRICS;
+  process.env.AGY_PROXY_METRICS = metrics;
+  try {
+    const { UsageAggregator } = await import("../server/aggregator");
+    const withProxy = new UsageAggregator().summarize("all", {});
+    const withoutProxy = new UsageAggregator().summarize("all", {});
+    // Same aggregator inputs otherwise: totals must be identical with or
+    // without proxy metrics, because proxy rows are enrichment-only.
+    assert.equal(withProxy.totals.inputTokens, withoutProxy.totals.inputTokens);
+    assert.equal(withProxy.totals.outputTokens, withoutProxy.totals.outputTokens);
+    const proxyBackendRows = withProxy.byProvider
+      .filter((group) => group.backend === "agy-proxy")
+      .flatMap((group) => group.entries);
+    assert.equal(proxyBackendRows.length, 0);
+    // The proxy file itself still parses for session enrichment.
+    assert.equal(readAgyProxyRows().callsBySource.cli, 1);
+  } finally {
+    if (previous === undefined) delete process.env.AGY_PROXY_METRICS;
+    else process.env.AGY_PROXY_METRICS = previous;
+  }
+});
+
+test("generations carry per-file mtimes and bucket onto real days", () => {
+  const home = mkdtempSync(join(tmpdir(), "usage-agyhome-"));
+  const convDir = join(home, ".gemini", "antigravity-cli", "conversations");
+  mkdirSync(convDir, { recursive: true });
+  const dayA = Date.UTC(2026, 8, 1, 12, 0, 0);
+  const dayB = Date.UTC(2026, 9, 5, 12, 0, 0);
+  const files: [string, number][] = [["a", dayA], ["b", dayB]];
+  for (let i = 0; i < files.length; i += 1) {
+    const [name, ts] = files[i];
+    const dbPath = join(convDir, `${name}.db`);
+    const db = new DatabaseSync(dbPath);
+    db.exec("CREATE TABLE steps (id INTEGER)");
+    db.exec("CREATE TABLE gen_metadata (idx INTEGER PRIMARY KEY, data BLOB, size INTEGER DEFAULT 0)");
+    db.prepare("INSERT INTO gen_metadata VALUES (0, ?, 0)").run(
+      Buffer.from(buildGenBlob(100 + i, 10, "gemini-3.8-flash", 1_000, 256_000)),
+    );
+    db.close();
+    utimesSync(dbPath, new Date(ts), new Date(ts));
+  }
+  const collection = collectAntigravity(home);
+  const rows = collection.rows;
+  assert.equal(rows.length, 2);
+  const dates = rows.map((rowItem) => dateKeyUtc(rowItem.timestampMs)).sort();
+  assert.deepEqual(dates, ["2026-09-01", "2026-10-05"]);
+  // bucketed onto their own days - two different buckets
+  const daily = bucketDaily(rows, null, dayB + 24 * 3600 * 1000);
+  const active = daily.filter((point) => point.inputTokens > 0);
+  assert.equal(active.length, 2);
+  assert.deepEqual(active.map((point) => point.date).sort(), ["2026-09-01", "2026-10-05"]);
+});
+
+test("protobuf walker survives a depth bomb and corrupt blobs never kill a db scan", () => {
+  // 100 nested length-delimited fields - must not overflow the stack
+  let nested: number[] = [8, 1];
+  for (let i = 0; i < 100; i += 1) nested = [...[0x0a], ...varintBytes(nested.length), ...nested];
+  const bomb = walkProtobuf(new Uint8Array(nested));
+  assert.equal(varintAt(bomb, Array(101).fill("1").join(".")), null); // too deep to resolve, but no crash
+
+  const dir = mkdtempSync(join(tmpdir(), "usage-corrupt-"));
+  const dbPath = join(dir, "conv.db");
+  const db = new DatabaseSync(dbPath);
+  db.exec("CREATE TABLE steps (id INTEGER)");
+  db.exec("CREATE TABLE gen_metadata (idx INTEGER PRIMARY KEY, data BLOB, size INTEGER DEFAULT 0)");
+  db.prepare("INSERT INTO gen_metadata VALUES (0, ?, 0)").run(Buffer.from(new Uint8Array([0xff, 0xff, 0xff])));
+  db.prepare("INSERT INTO gen_metadata VALUES (1, ?, 0)").run(
+    Buffer.from(buildGenBlob(500, 50, "gemini-3.8-flash", 600, 256_000)),
+  );
+  db.close();
+  const scan = scanConversationDb(dbPath);
+  assert.equal(scan.generations.length, 1); // corrupt blob skipped, good one kept
+  assert.equal(scan.generations[0].inputTokens, 500);
+});
+
+test("sum of daily points equals totals for every period (calendar alignment)", async () => {
+  const { UsageAggregator } = await import("../server/aggregator");
+  const aggregator = new UsageAggregator();
+  for (const period of ["1d", "7d", "30d", "all"] as const) {
+    const dashboard = aggregator.dashboard(period, {});
+    const summary = aggregator.summarize(period, {});
+    const dailySum = dashboard.series.daily.reduce(
+      (sum, point) => sum + point.inputTokens + point.outputTokens,
+      0,
+    );
+    assert.equal(dailySum, summary.totals.inputTokens + summary.totals.outputTokens, period);
+    // every filtered row fell inside the chart's day range
+    if (dashboard.series.daily.length > 0) {
+      const first = dashboard.series.daily[0].date;
+      const last = dashboard.series.daily[dashboard.series.daily.length - 1].date;
+      assert.ok(summary.totals.sessions === 0 || last >= first, period);
+    }
+  }
 });

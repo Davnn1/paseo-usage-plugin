@@ -56,6 +56,8 @@ function cacheKey(period: Period, range: RangeOptions): string {
   return `${period}|${range.startDate ?? ""}|${range.endDate ?? ""}`;
 }
 
+const MAX_CACHE_ENTRIES = 32;
+
 export class UsageAggregator {
   private readonly cache = new Map<string, CacheEntry>();
 
@@ -66,7 +68,14 @@ export class UsageAggregator {
   ): BuildResult {
     const nowMs = options.nowMs ?? Date.now();
     const result = this.build(period, nowMs, options);
-    this.cache.set(cacheKey(period, options), { generatedAtMs: nowMs, result });
+    const key = cacheKey(period, options);
+    this.cache.delete(key);
+    this.cache.set(key, { generatedAtMs: nowMs, result });
+    while (this.cache.size > MAX_CACHE_ENTRIES) {
+      const oldest = this.cache.keys().next().value;
+      if (oldest === undefined) break;
+      this.cache.delete(oldest);
+    }
     return result;
   }
 
@@ -131,9 +140,11 @@ export class UsageAggregator {
     }
 
     const antigravity = collectAntigravity();
+    // The decoded store is authoritative for aggregates and the model table.
+    // agy-usage-proxy rows are session/pill enrichment only - pushing them
+    // here would double-count every proxied call (same LLM calls, two sources).
     rows.push(...antigravity.rows);
     const agyProxy = readAgyProxyRows();
-    rows.push(...agyProxy.rows);
 
     const sources = providerEntries
       ? this.discoveredSources(providerEntries, rows, antigravity, agyProxy, adapterSources)

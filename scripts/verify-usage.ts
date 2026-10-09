@@ -43,7 +43,10 @@ function relDiff(actual: number, expected: number): number {
 }
 
 function assertPipeline(name: string, actual: number, expected: number) {
-  const ok = relDiff(actual, expected) <= LIVE_DRIFT_TOLERANCE;
+  // Relative tolerance plus an absolute floor: per-entry cost rounding and
+  // live row updates dominate small totals (e.g. a $0.18 day).
+  const limit = Math.max(expected * LIVE_DRIFT_TOLERANCE, 0.02);
+  const ok = Math.abs(actual - expected) <= limit;
   if (!ok) pipelineFailures += 1;
   console.log(`  ${ok ? "PASS" : "FAIL"} ${name}: js=${actual} sql=${expected} (reldiff ${(relDiff(actual, expected) * 100).toFixed(3)}%)`);
 }
@@ -68,8 +71,11 @@ function checkSpec(period: string, totals: Totals) {
 function groundTruth(period: string): Totals {
   const db = new DatabaseSync(DB_PATH, { readOnly: true });
   try {
+    // Calendar-day windows, matching the plugin's filterPeriod exactly.
+    const now = Date.now();
+    const dayStart = Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth(), new Date(now).getUTCDate());
     const cutoffClause =
-      period === "all" ? "1=1" : `time_created > ${Date.now() - Number(period.replace("d", "")) * 24 * 3600 * 1000}`;
+      period === "all" ? "1=1" : `time_created >= ${dayStart - (Number(period.replace("d", "")) - 1) * 24 * 3600 * 1000}`;
     const row = db
       .prepare(
         `SELECT ifnull(sum(tokens_input),0) i, ifnull(sum(tokens_output),0) o,

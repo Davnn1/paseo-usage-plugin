@@ -12,6 +12,20 @@ export interface AntigravityStats {
   lastModifiedMs: number;
   /** Per-model token totals decoded from gen_metadata protobuf blobs. */
   byModel: Map<string, ModelTotals>;
+  /** One entry per decoded generation, stamped with its file mtime. */
+  generations: Generation[];
+}
+
+export interface Generation {
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  conversationId: string | null;
+  contextUsed: number | null;
+  contextMax: number | null;
+  /** The blob carries no timestamp; the conversation file mtime is the
+   *  per-generation fallback so rows bucket onto real days. */
+  tsMs: number;
 }
 
 export interface ModelTotals {
@@ -67,6 +81,7 @@ export function decodeGenMetadata(data: Uint8Array): {
   model: string;
   inputTokens: number;
   outputTokens: number;
+  conversationId: string | null;
   contextUsed: number | null;
   contextMax: number | null;
 } | null {
@@ -75,17 +90,20 @@ export function decodeGenMetadata(data: Uint8Array): {
   const outputTokens = varintAt(message, "1.4.3");
   const model = stringAt(message, "1.19");
   if (inputTokens === null || outputTokens === null || !model) return null;
+  const conversationId = stringAt(message, "4");
   const contextUsed = varintAt(message, "1.9.10.1");
   const contextMax = varintAt(message, "1.9.10.4") ?? varintAt(message, "1.9.10.2");
-  return { model, inputTokens, outputTokens, contextUsed, contextMax };
+  return { model, inputTokens, outputTokens, conversationId, contextUsed, contextMax };
 }
 
-/** Count steps and fold every decodable gen_metadata row into per-model totals. */
+/** Count steps and fold every decodable gen_metadata row into totals and generations. */
 export function scanConversationDb(dbPath: string): {
   steps: number;
   byModel: Map<string, ModelTotals>;
+  generations: Generation[];
 } {
   const byModel = new Map<string, ModelTotals>();
+  const generations: Generation[] = [];
   const db = new DatabaseSync(dbPath, { readOnly: true });
   try {
     let steps = 0;
@@ -95,19 +113,34 @@ export function scanConversationDb(dbPath: string): {
     } catch {
       steps = 0;
     }
+    // The blob has no timestamp (1.9.2 is a 2^64 sentinel) - per-file mtime
+    // is the per-generation fallback, and idx order approximates recency.
+    const tsMs = statSync(dbPath).mtimeMs;
     let blobs: { data: Uint8Array }[] = [];
     try {
-      blobs = db.prepare("SELECT data FROM gen_metadata WHERE data IS NOT NULL").all() as unknown as {
+      blobs = db.prepare("SELECT data FROM gen_metadata WHERE data IS NOT NULL ORDER BY idx").all() as unknown as {
         data: Uint8Array;
       }[];
     } catch {
       blobs = [];
     }
-    // gen_metadata.idx asc approximates generation order, so the last decoded
-    // context occupancy per model is the most recent one.
     for (const { data } of blobs) {
-      const decoded = decodeGenMetadata(new Uint8Array(data));
+      let decoded: ReturnType<typeof decodeGenMetadata> = null;
+      try {
+        decoded = decodeGenMetadata(new Uint8Array(data));
+      } catch {
+        decoded = null; // one corrupt blob must not kill the whole database
+      }
       if (!decoded) continue;
+      generations.push({
+        model: decoded.model,
+        inputTokens: decoded.inputTokens,
+        outputTokens: decoded.outputTokens,
+        conversationId: decoded.conversationId,
+        contextUsed: decoded.contextUsed,
+        contextMax: decoded.contextMax,
+        tsMs,
+      });
       let totals = byModel.get(decoded.model);
       if (!totals) {
         totals = { inputTokens: 0, outputTokens: 0, generations: 0, contextUsed: null, contextMax: null };
@@ -121,7 +154,7 @@ export function scanConversationDb(dbPath: string): {
         totals.contextMax = decoded.contextMax;
       }
     }
-    return { steps, byModel };
+    return { steps, byModel, generations };
   } finally {
     db.close();
   }
@@ -136,15 +169,16 @@ export function collectStats(dir: string): AntigravityStats | null {
   } catch {
     return null;
   }
-  const stats: AntigravityStats = { sessions: 0, steps: 0, lastModifiedMs: 0, byModel: new Map() };
+  const stats: AntigravityStats = { sessions: 0, steps: 0, lastModifiedMs: 0, byModel: new Map(), generations: [] };
   for (const name of entries) {
     if (!name.endsWith(".db") || name.endsWith("-wal.db")) continue;
     const path = join(dir, name);
     try {
       if (!statSync(path).isFile()) continue;
       stats.sessions += 1;
-      const { steps, byModel } = scanConversationDb(path);
+      const { steps, byModel, generations } = scanConversationDb(path);
       stats.steps += steps;
+      stats.generations.push(...generations);
       for (const [model, totals] of byModel) {
         const existing = stats.byModel.get(model);
         if (!existing) {
@@ -179,18 +213,20 @@ export function collectAntigravity(home: string = process.env.HOME ?? ""): Antig
   const rows: UsageRow[] = [];
   const pushRows = (stats: AntigravityStats | null, backend: string, provider: string) => {
     if (!stats) return;
-    for (const [model, totals] of stats.byModel) {
+    // One row per generation so daily bucketing lands on real days; token
+    // sums per model are identical either way.
+    for (const generation of stats.generations) {
       rows.push({
         backend,
         provider,
-        model,
-        inputTokens: totals.inputTokens,
-        outputTokens: totals.outputTokens,
+        model: generation.model,
+        inputTokens: generation.inputTokens,
+        outputTokens: generation.outputTokens,
         reasoningTokens: 0, // not recorded separately in gen_metadata
         cacheReadTokens: 0, // cache columns carry no token data - honest zeros
         cacheWriteTokens: 0,
         costUsd: 0, // no cost recorded locally
-        timestampMs: stats.lastModifiedMs,
+        timestampMs: generation.tsMs,
       });
     }
   };
