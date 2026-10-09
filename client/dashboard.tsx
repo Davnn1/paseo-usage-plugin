@@ -43,7 +43,7 @@ export function Dashboard({
   return (
     <View style={stylesGrid(compact)}>
       <View style={stylesCard(theme, compact)}>
-        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
           <Text style={stylesCardTitle(theme)}>OVERVIEW</Text>
           <Text style={{ color: theme.colors.foregroundMuted, fontSize: 10 }}>Last 365 days</Text>
         </View>
@@ -209,7 +209,7 @@ function Heatmap({
 
   return (
     <View style={{ gap: 6 }}>
-      <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11 }}>
+      <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11, marginTop: 2, marginBottom: 2 }}>
         {`${activeDays} active days · ${formatTokens(totalTokens)} tokens · 365 days`}
       </Text>
       <ScrollView horizontal showsHorizontalScrollIndicator={false}>
@@ -469,23 +469,26 @@ function TrendChart({
 
   const count = points.length;
   const gap = 1;
-  // Bar width: fills the container when few segments, clamps to a readable
-  // minimum when many (All period scrolls horizontally instead of shrinking).
+  // Explicit pixel geometry: fills the container when few segments, clamps to
+  // a readable minimum when many (All period scrolls instead of shrinking).
+  // No flex:1 bars - explicit widths render identically on every host.
   const distributed = width > 0 ? width / count : 8;
   const barWidth = Math.min(28, Math.max(8, distributed));
   const scroll = width > 0 && count * (barWidth + gap) > width;
+  const contentWidth = scroll ? count * (barWidth + gap) : width;
   const slotWidth = scroll ? barWidth + gap : width > 0 ? width / count : barWidth + gap;
+  const exactBarWidth = scroll ? barWidth : Math.max(1, slotWidth - gap);
 
   const focusIndex = focus ? points.findIndex((point) => point.date === focus.date) : -1;
   const focused = focusIndex >= 0 ? points[focusIndex] : null;
 
-  const renderBar = (point: DailyPoint, widthStyle: { width: number } | { flex: number }) => {
+  const renderBar = (point: DailyPoint, exactWidth: number) => {
     const inRatio = point.inputTokens / maxTokens;
     const outRatio = point.outputTokens / maxTokens;
     const costRatio = point.costUsd / maxCost;
     const hasActivity = point.inputTokens + point.outputTokens > 0;
     const column = (
-      <View style={[{ height: chartHeight, justifyContent: "flex-end" }, widthStyle]}>
+      <View style={{ width: exactWidth, height: chartHeight, justifyContent: "flex-end" }}>
         <View
           style={{
             position: "absolute" as const,
@@ -536,10 +539,10 @@ function TrendChart({
         flexDirection: "row",
         gap,
         height: chartHeight,
-        width: scroll ? count * (barWidth + gap) : "100%",
+        width: Math.max(1, contentWidth),
       }}
     >
-      {points.map((point) => renderBar(point, scroll ? { width: barWidth } : { flex: 1 }))}
+      {points.map((point) => renderBar(point, exactBarWidth))}
       {focused && focusIndex >= 0 ? (
         <>
           <View
@@ -562,7 +565,7 @@ function TrendChart({
               top: 2,
               left: Math.min(
                 Math.max(4, focusIndex * slotWidth + slotWidth / 2 - 75),
-                Math.max(4, (scroll ? count * (barWidth + gap) : width) - 154),
+                Math.max(4, contentWidth - 154),
               ),
               width: 150,
               backgroundColor: theme.colors.surface2,
@@ -586,6 +589,14 @@ function TrendChart({
       ) : null}
     </View>
   );
+
+  // Wait for the container measurement before drawing - explicit pixel
+  // geometry needs a real width, and this avoids a collapsed first paint.
+  if (width <= 0) {
+    return (
+      <View onLayout={(event) => setWidth(event.nativeEvent.layout.width)} style={{ height: chartHeight }} />
+    );
+  }
 
   return (
     <View style={{ gap: 6 }}>

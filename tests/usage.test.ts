@@ -755,3 +755,23 @@ test("dashboard 7d bucketing: 7 daily points, active days, no rows lost", async 
   assert.equal(sliding.series.daily.length, 7);
   assert.equal(sliding.series.daily[6].date, dateKeyUtc(Date.now()));
 });
+
+test("bucketDaily with a 7d window: 7 gap-filled entries ending today", () => {
+  const now = Date.UTC(2026, 9, 9, 12, 0, 0); // 2026-10-09T12:00:00Z
+  const rows = [
+    row({ timestampMs: Date.UTC(2026, 9, 2, 8, 0, 0), inputTokens: 111 }), // 8 days ago: outside the 7-day window
+    row({ timestampMs: Date.UTC(2026, 9, 4, 8, 0, 0), inputTokens: 10 }), // day 1
+    row({ timestampMs: Date.UTC(2026, 9, 8, 23, 0, 0), inputTokens: 20 }), // day 5
+    row({ timestampMs: Date.UTC(2026, 9, 9, 1, 0, 0), inputTokens: 30 }), // day 7 (today)
+  ];
+  const daily = bucketDaily(rows, 7, now);
+  assert.equal(daily.length, 7);
+  assert.equal(daily[0].date, "2026-10-03"); // today - 6 days
+  assert.equal(daily[6].date, "2026-10-09");
+  assert.equal(daily[0].inputTokens, 0); // 10-02 row excluded
+  assert.equal(daily[1].inputTokens, 10);
+  assert.equal(daily[5].inputTokens, 20);
+  assert.equal(daily[6].inputTokens, 30);
+  const active = daily.filter((point) => point.inputTokens > 0).length;
+  assert.equal(active, 3);
+});
