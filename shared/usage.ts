@@ -245,15 +245,41 @@ export function buildPillText(
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+/** Hardcoded daemon-local zone so day bucketing is deterministic per machine. */
+export const LOCAL_TIME_ZONE = "Asia/Jakarta";
+
+const LOCAL_DATE_FORMAT = new Intl.DateTimeFormat("en-CA", {
+  timeZone: LOCAL_TIME_ZONE,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
+/** YYYY-MM-DD of the timestamp in the local zone (WIB on the daemon machine). */
+export function localDateKey(ms: number): string {
+  return LOCAL_DATE_FORMAT.format(new Date(ms)); // en-CA renders YYYY-MM-DD
+}
+
+/**
+ * Epoch of the actual local midnight for ms's day: walk back from the day's
+ * key until the local key changes. Days are contiguous 24h blocks (the zone
+ * has no DST), so any ms on a local day is >= its scalar and < the next day's.
+ */
+export function startOfLocalDay(ms: number): number {
+  const key = localDateKey(ms);
+  let t = Date.parse(`${key}T00:00:00.000Z`);
+  while (localDateKey(t - 60_000) === key) t -= 60_000;
+  return t;
+}
+
+/** Weekday (0=Sun) of the timestamp's LOCAL day. */
+export function localWeekday(ms: number): number {
+  return new Date(startOfLocalDay(ms) + 12 * 3600 * 1000).getUTCDay();
+}
+
 /** YYYY-MM-DD (UTC) for an epoch-ms timestamp. */
 export function dateKeyUtc(ms: number): string {
   return new Date(ms).toISOString().slice(0, 10);
-}
-
-/** UTC day bucket key -> start-of-day epoch ms. */
-function dayStartUtc(ms: number): number {
-  const date = new Date(ms);
-  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
 }
 
 /** Total token volume for a daily point: input + output + cache-read. */
@@ -270,7 +296,7 @@ export function bucketDaily(rows: UsageRow[], windowDays: number | null, nowMs: 
   const byDay = new Map<string, DailyPoint>();
   let earliest = Number.POSITIVE_INFINITY;
   for (const row of rows) {
-    const key = dateKeyUtc(row.timestampMs);
+    const key = localDateKey(row.timestampMs);
     if (row.timestampMs < earliest) earliest = row.timestampMs;
     let point = byDay.get(key);
     if (!point) {
@@ -285,14 +311,14 @@ export function bucketDaily(rows: UsageRow[], windowDays: number | null, nowMs: 
   }
 
   const last = endMs ?? nowMs;
-  const today = dayStartUtc(last);
+  const today = startOfLocalDay(last);
   const start = windowDays === null
-    ? (Number.isFinite(earliest) ? dayStartUtc(earliest) : today)
+    ? (Number.isFinite(earliest) ? startOfLocalDay(earliest) : today)
     : today - (windowDays - 1) * DAY_MS;
 
   const result: DailyPoint[] = [];
   for (let t = start; t <= today; t += DAY_MS) {
-    const key = dateKeyUtc(t);
+    const key = localDateKey(t);
     const point = byDay.get(key);
     result.push(
       point
@@ -307,7 +333,7 @@ export function bucketDaily(rows: UsageRow[], windowDays: number | null, nowMs: 
 export function bucketWeekly(daily: DailyPoint[]): WeeklyPoint[] {
   const slots: WeeklyPoint[] = Array.from({ length: 7 }, (_, weekday) => ({ weekday, tokens: 0, costUsd: 0 }));
   for (const point of daily) {
-    const weekday = new Date(`${point.date}T00:00:00Z`).getUTCDay();
+    const weekday = localWeekday(Date.parse(`${point.date}T12:00:00Z`));
     slots[weekday].tokens += dailyTokens(point);
     slots[weekday].costUsd += point.costUsd;
   }
@@ -324,7 +350,7 @@ export function mostActiveDay(daily: DailyPoint[]): MostActiveDay | null {
   }
   if (!best) return null;
   return {
-    weekday: new Date(`${best.date}T00:00:00Z`).getUTCDay(),
+    weekday: localWeekday(Date.parse(`${best.date}T12:00:00Z`)),
     date: best.date,
     tokens: dailyTokens(best),
   };
@@ -356,22 +382,29 @@ export function cacheHitRatio(cacheReadTokens: number, inputTokens: number): num
  */
 export function filterPeriod(rows: UsageRow[], period: Period, nowMs: number): UsageRow[] {
   if (period === "all") return rows;
-  const cutoff = dayStartUtc(nowMs) - (PERIOD_DAYS[period] - 1) * DAY_MS;
+  const cutoff = startOfLocalDay(nowMs) - (PERIOD_DAYS[period] - 1) * DAY_MS;
   return rows.filter((row) => row.timestampMs >= cutoff);
 }
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-/** Inclusive UTC date-range filter; either bound optional. Unparseable bounds are ignored. */
+/**
+ * Inclusive local-day range filter; either bound optional. Compares the
+ * local YYYY-MM-DD keys lexicographically - a 06:00 WIB session lands on its
+ * own local day, never the previous UTC day. Unparseable bounds are ignored.
+ */
 export function filterDateRange(
   rows: UsageRow[],
   startDate?: string,
   endDate?: string,
 ): UsageRow[] {
   if (!startDate && !endDate) return rows;
-  const startMs = startDate && DATE_RE.test(startDate) ? Date.parse(`${startDate}T00:00:00.000Z`) : Number.NEGATIVE_INFINITY;
-  const endMs = endDate && DATE_RE.test(endDate) ? Date.parse(`${endDate}T23:59:59.999Z`) : Number.POSITIVE_INFINITY;
-  return rows.filter((row) => row.timestampMs >= startMs && row.timestampMs <= endMs);
+  const start = startDate && DATE_RE.test(startDate) ? startDate : "0000-01-01";
+  const end = endDate && DATE_RE.test(endDate) ? endDate : "9999-12-31";
+  return rows.filter((row) => {
+    const key = localDateKey(row.timestampMs);
+    return key >= start && key <= end;
+  });
 }
 
 /**
@@ -397,9 +430,15 @@ export function dateRangeDays(startDate: string, endDate: string): number {
   return Math.round((end - start) / DAY_MS) + 1;
 }
 
-/** End-of-day epoch ms for a YYYY-MM-DD bound (falls back to nowMs). */
+/**
+ * Last epoch ms of a local-day bound: the final millisecond of endDate's
+ * local day (falls back to nowMs). Bucket anchors derived from this stay on
+ * endDate itself instead of rolling into the next local day.
+ */
 export function rangeEndMs(endDate: string | undefined, nowMs: number): number {
-  if (endDate && DATE_RE.test(endDate)) return Date.parse(`${endDate}T23:59:59.999Z`);
+  if (endDate && DATE_RE.test(endDate)) {
+    return startOfLocalDay(Date.parse(`${endDate}T00:00:00.000Z`)) + DAY_MS - 1;
+  }
   return nowMs;
 }
 

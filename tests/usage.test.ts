@@ -58,8 +58,8 @@ test("filterPeriod uses calendar days so filters match daily bucketing", () => {
   assert.equal(filterPeriod(rows, "30d", NOW).length, 2); // 30 calendar days back: the -30d row sits on day 31
   assert.equal(filterPeriod(rows, "7d", NOW).length, 2);
   assert.equal(filterPeriod(rows, "1d", NOW).length, 1); // today only
-  // boundary: start-of-today is included, yesterday is not
-  const dayStart = Date.UTC(new Date(NOW).getUTCFullYear(), new Date(NOW).getUTCMonth(), new Date(NOW).getUTCDate());
+  // boundary: local midnight today is included, one ms earlier is not
+  const dayStart = startOfLocalDay(NOW);
   assert.equal(filterPeriod([...rows, row({ timestampMs: dayStart })], "1d", NOW).length, 2);
   assert.equal(filterPeriod([...rows, row({ timestampMs: dayStart - 1 })], "1d", NOW).length, 1);
   // a 7-day window covers exactly 7 calendar days
@@ -610,7 +610,7 @@ test("mapSourceStatus: antigravity used via proxied calls when store is empty", 
 // Date-range filter (Week/Month/Custom)
 // ---------------------------------------------------------------------------
 
-import { dateRangeDays, dateKeyUtc, filterDateRange, rangeEndMs, selectPeriodRows } from "../shared/usage";
+import { dateRangeDays, dateKeyUtc, filterDateRange, rangeEndMs, selectPeriodRows, startOfLocalDay } from "../shared/usage";
 
 test("filterDateRange is inclusive on both bounds and optional per side", () => {
   const dayRows = [
@@ -619,10 +619,11 @@ test("filterDateRange is inclusive on both bounds and optional per side", () => 
     row({ timestampMs: Date.parse("2026-10-06T12:00:00.000Z") }),
     row({ timestampMs: Date.parse("2026-10-07T00:00:00.000Z") }),
   ];
+  // local keys: 10-05, 10-06 (23:59:59Z = 06:59 WIB 10-06), 10-06, 10-07
   assert.equal(filterDateRange(dayRows, "2026-10-05", "2026-10-07").length, 4);
-  assert.equal(filterDateRange(dayRows, "2026-10-06", "2026-10-06").length, 1);
-  assert.equal(filterDateRange(dayRows, undefined, "2026-10-05").length, 2);
-  assert.equal(filterDateRange(dayRows, "2026-10-06", undefined).length, 2);
+  assert.equal(filterDateRange(dayRows, "2026-10-06", "2026-10-06").length, 2);
+  assert.equal(filterDateRange(dayRows, undefined, "2026-10-05").length, 1);
+  assert.equal(filterDateRange(dayRows, "2026-10-06", undefined).length, 3);
   assert.equal(filterDateRange(dayRows, "bogus", "also-bogus").length, 4); // unparseable ignored
 });
 
@@ -641,7 +642,10 @@ test("selectPeriodRows: range overrides the sliding period window", () => {
 test("dateRangeDays and rangeEndMs helpers", () => {
   assert.equal(dateRangeDays("2026-10-01", "2026-10-07"), 7);
   assert.equal(dateRangeDays("2026-10-07", "2026-10-01"), 1); // invalid -> 1
-  assert.equal(rangeEndMs("2026-10-07", NOW), Date.parse("2026-10-07T23:59:59.999Z"));
+  assert.equal(
+    rangeEndMs("2026-10-07", NOW),
+    startOfLocalDay(Date.parse("2026-10-07T00:00:00.000Z")) + 24 * 3600 * 1000 - 1,
+  );
   assert.equal(rangeEndMs(undefined, NOW), NOW);
 });
 
@@ -803,23 +807,35 @@ test("dashboard 7d bucketing: 7 daily points, active days, no rows lost", async 
 });
 
 test("bucketDaily with a 7d window: 7 gap-filled entries ending today", () => {
-  const now = Date.UTC(2026, 9, 9, 12, 0, 0); // 2026-10-09T12:00:00Z
+  const now = Date.UTC(2026, 9, 9, 12, 0, 0); // 2026-10-09T19:00:00 WIB
   const rows = [
-    row({ timestampMs: Date.UTC(2026, 9, 2, 8, 0, 0), inputTokens: 111 }), // 8 days ago: outside the 7-day window
-    row({ timestampMs: Date.UTC(2026, 9, 4, 8, 0, 0), inputTokens: 10 }), // day 1
-    row({ timestampMs: Date.UTC(2026, 9, 8, 23, 0, 0), inputTokens: 20 }), // day 5
-    row({ timestampMs: Date.UTC(2026, 9, 9, 1, 0, 0), inputTokens: 30 }), // day 7 (today)
+    row({ timestampMs: Date.UTC(2026, 9, 2, 8, 0, 0), inputTokens: 111 }), // WIB 10-02: outside the 7-day window
+    row({ timestampMs: Date.UTC(2026, 9, 4, 8, 0, 0), inputTokens: 10 }), // WIB 10-04, day 1
+    row({ timestampMs: Date.UTC(2026, 9, 8, 23, 0, 0), inputTokens: 20 }), // WIB 10-09 06:00 - local key 10-09
+    row({ timestampMs: Date.UTC(2026, 9, 9, 1, 0, 0), inputTokens: 30 }), // WIB 10-09 08:00 - local key 10-09
   ];
   const daily = bucketDaily(rows, 7, now);
   assert.equal(daily.length, 7);
-  assert.equal(daily[0].date, "2026-10-03"); // today - 6 days
+  assert.equal(daily[0].date, "2026-10-03"); // today - 6 local days
   assert.equal(daily[6].date, "2026-10-09");
   assert.equal(daily[0].inputTokens, 0); // 10-02 row excluded
   assert.equal(daily[1].inputTokens, 10);
-  assert.equal(daily[5].inputTokens, 20);
-  assert.equal(daily[6].inputTokens, 30);
+  assert.equal(daily[5].inputTokens, 0); // WIB 10-08 has nothing
+  assert.equal(daily[6].inputTokens, 50); // both 10-09 rows land on the local day
   const active = daily.filter((point) => point.inputTokens > 0).length;
-  assert.equal(active, 3);
+  assert.equal(active, 2);
+});
+
+test("WIB boundary: a 06:00 WIB session belongs to its local day, not the previous UTC day", () => {
+  // 2026-10-06T23:00:00Z = 2026-10-07 06:00 WIB
+  const wibMorning = Date.UTC(2026, 9, 6, 23, 0, 0);
+  const rows = [row({ timestampMs: wibMorning, inputTokens: 42 })];
+  const daily = bucketDaily(rows, 7, Date.UTC(2026, 9, 9, 12, 0, 0));
+  const hit = daily.find((point) => point.inputTokens === 42);
+  assert.equal(hit?.date, "2026-10-07");
+  // filter agrees: the session is inside a 10-07-only range
+  assert.equal(filterDateRange(rows, "2026-10-07", "2026-10-07").length, 1);
+  assert.equal(filterDateRange(rows, "2026-10-06", "2026-10-06").length, 0);
 });
 
 // ---------------------------------------------------------------------------

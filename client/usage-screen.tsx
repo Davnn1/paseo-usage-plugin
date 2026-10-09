@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { Pressable, RefreshControl, ScrollView, Text, TextInput, View } from "react-native";
 import { Dashboard } from "./dashboard";
-import { usageDashboardRpc, usageRefreshRpc, usageSummaryRpc, type Period, type UsageEntry, type UsageSummaryOutput } from "../shared/usage";
+import { localDateKey, startOfLocalDay, usageDashboardRpc, usageRefreshRpc, usageSummaryRpc, type Period, type UsageEntry, type UsageSummaryOutput } from "../shared/usage";
 
 const PERIODS: { id: Mode; label: string; hint: string }[] = [
   { id: "1d", label: "1d", hint: "Today" },
@@ -18,32 +18,34 @@ const PERIODS: { id: Mode; label: string; hint: string }[] = [
 type Mode = Period | "week" | "month" | "custom";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const dateKeyOf = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+const dateKeyOf = localDateKey;
+/** Scalar for a YYYY-MM-DD key (see startOfLocalDay in shared). */
+const scalarOf = (key: string) => Date.parse(`${key}T00:00:00.000Z`);
 
-/** Monday-first ISO week containing the anchor (UTC). */
+/** Monday-first week containing the anchor (local days). */
 function weekRange(anchorMs: number): { startDate: string; endDate: string } {
-  const d = new Date(anchorMs);
-  const day = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
-  const mondayOffset = (new Date(day).getUTCDay() + 6) % 7;
+  const day = startOfLocalDay(anchorMs);
+  const mondayOffset = (new Date(day + 12 * 3600 * 1000).getUTCDay() + 6) % 7;
   const start = day - mondayOffset * DAY_MS;
   return { startDate: dateKeyOf(start), endDate: dateKeyOf(start + 6 * DAY_MS) };
 }
 
-/** Calendar month containing the anchor (UTC). */
+/** Calendar month containing the anchor (local days). */
 function monthRange(anchorMs: number): { startDate: string; endDate: string } {
-  const d = new Date(anchorMs);
-  const year = d.getUTCFullYear();
-  const month = d.getUTCMonth();
-  const start = Date.UTC(year, month, 1);
-  const end = Date.UTC(year, month + 1, 0);
+  const key = localDateKey(anchorMs); // YYYY-MM-DD
+  const start = scalarOf(`${key.slice(0, 7)}-01`);
+  const probe = new Date(start + 40 * DAY_MS); // into the next month
+  const end = scalarOf(localDateKey(probe.getTime())) - DAY_MS;
   return { startDate: dateKeyOf(start), endDate: dateKeyOf(end) };
 }
 
 function shiftAnchor(mode: Mode, anchorMs: number, direction: -1 | 1): number {
   if (mode === "week") return anchorMs + direction * 7 * DAY_MS;
   if (mode === "month") {
-    const d = new Date(anchorMs);
-    return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + direction, 1);
+    const key = localDateKey(anchorMs);
+    const year = Number(key.slice(0, 4));
+    const month = Number(key.slice(5, 7)) - 1 + direction;
+    return scalarOf(`${new Date(Date.UTC(year, month, 1)).toISOString().slice(0, 7)}-01`) + 12 * 3600 * 1000;
   }
   return anchorMs + direction * 7 * DAY_MS;
 }

@@ -16,6 +16,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { UsageAggregator } from "../server/aggregator";
+import { startOfLocalDay } from "../shared/usage";
 import { readCodexRows } from "../server/adapters/codex";
 
 const DB_PATH = `${process.env.HOME}/.local/share/opencode/opencode.db`;
@@ -71,9 +72,9 @@ function checkSpec(period: string, totals: Totals) {
 function groundTruth(period: string): Totals {
   const db = new DatabaseSync(DB_PATH, { readOnly: true });
   try {
-    // Calendar-day windows, matching the plugin's filterPeriod exactly.
+    // Local-calendar-day windows, matching the plugin's filterPeriod exactly.
     const now = Date.now();
-    const dayStart = Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth(), new Date(now).getUTCDate());
+    const dayStart = startOfLocalDay(now);
     const cutoffClause =
       period === "all" ? "1=1" : `time_created >= ${dayStart - (Number(period.replace("d", "")) - 1) * 24 * 3600 * 1000}`;
     const row = db

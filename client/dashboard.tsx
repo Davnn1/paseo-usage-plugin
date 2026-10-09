@@ -3,10 +3,14 @@ import { useMemo, useRef, useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import {
   dailyTokens,
+  localDateKey,
+  localWeekday,
   type DailyPoint,
   type UsageDashboardOutput,
   type WeeklyPoint,
 } from "../shared/usage";
+
+const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 function formatTokens(value: number): string {
   if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(1)}B`;
@@ -225,32 +229,33 @@ function Heatmap({
 
   const { cells, weeks, monthLabels, activeDays, totalTokens, maxTokens, byDateKey } = useMemo(() => {
     const map = new Map(points.map((point) => [point.date, point]));
-    const first = new Date(`${points[0]?.date ?? new Date().toISOString().slice(0, 10)}T00:00:00Z`);
-    const anchor = Date.UTC(first.getUTCFullYear(), first.getUTCMonth(), first.getUTCDate());
-    const anchorWeekday = first.getUTCDay();
+    // Day keys are local-date scalars (see startOfLocalDay in shared).
+    const anchor = Date.parse(`${points[0]?.date ?? localDateKey(Date.now())}T00:00:00.000Z`);
+    const anchorWeekday = localWeekday(anchor + 12 * 3600 * 1000);
     const start = anchor - ((anchorWeekday + 6) % 7) * 24 * 3600 * 1000;
 
     const cells: { date: string; week: number; weekday: number; tokens: number; point: DailyPoint | null }[] = [];
     const monthLabels: { week: number; label: string }[] = [];
-    let lastMonth = -1;
+    let lastMonth = "";
     let maxTokens = 0;
     let activeDays = 0;
     let totalTokens = 0;
 
     for (let i = 0; i < points.length; i += 1) {
       const t = start + i * 24 * 3600 * 1000;
-      const d = new Date(t);
-      const point = map.get(d.toISOString().slice(0, 10));
+      const key = localDateKey(t);
+      const point = map.get(key);
       const tokens = point ? dailyTokens(point) : 0;
       const week = Math.floor(i / 7);
-      if (d.getUTCMonth() !== lastMonth && d.getUTCDay() === 1) {
-        monthLabels.push({ week, label: d.toLocaleString("en-US", { month: "short", timeZone: "UTC" }) });
-        lastMonth = d.getUTCMonth();
+      const monthKey = key.slice(0, 7);
+      if (monthKey !== lastMonth && localWeekday(t) === 1) {
+        monthLabels.push({ week, label: MONTH_NAMES[Number(key.slice(5, 7)) - 1] });
+        lastMonth = monthKey;
       }
       if (tokens > 0) activeDays += 1;
       totalTokens += tokens;
       if (tokens > maxTokens) maxTokens = tokens;
-      cells.push({ date: d.toISOString().slice(0, 10), week, weekday: d.getUTCDay(), tokens, point: point ?? null });
+      cells.push({ date: key, week, weekday: localWeekday(t), tokens, point: point ?? null });
     }
     const weeks = Math.max(1, Math.ceil(cells.length / 7));
     const byDateKey = new Map(cells.map((cellPoint) => [cellPoint.date, cellPoint]));
