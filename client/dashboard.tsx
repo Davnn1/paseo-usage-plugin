@@ -63,36 +63,46 @@ export function Dashboard({
 } & PluginHostProps) {
   const compact = layout.compact;
   const [tip, setTip] = useState<TipState | null>(null);
+  const tipRef = useRef<TipState | null>(null);
+  tipRef.current = tip;
   const [rootWidth, setRootWidth] = useState(0);
+  const rootRef = useRef<View | null>(null);
+  // measureInWindow returns WINDOW coordinates, but the tooltip layer renders
+  // inside this container - position both and render the delta.
+  const place = (key: string, anchor: TipAnchor | null, tipData: TipData) => {
+    const apply = (originX: number, originY: number) => {
+      if (anchor?.measureInWindow) {
+        anchor.measureInWindow((x, y, w, h) => {
+          setTip((current) =>
+            current && current.key === key
+              ? current
+              : { key, x: x - originX + w / 2, y: y - originY + h, data: tipData },
+          );
+        });
+      } else {
+        setTip((current) => (current && current.key === key ? current : { key, x: 0, y: 0, data: tipData }));
+      }
+    };
+    if (rootRef.current?.measureInWindow) {
+      rootRef.current.measureInWindow(apply);
+    } else {
+      apply(0, 0);
+    }
+  };
 
   const controller: TipController = useMemo(
     () => ({
-      show: (key, anchor, tipData) => {
-        if (anchor?.measureInWindow) {
-          anchor.measureInWindow((x, y, w, h) => {
-            setTip((current) =>
-              current && current.key === key ? current : { key, x: x + w / 2, y: y + h, data: tipData },
-            );
-          });
-        } else {
-          setTip((current) => (current && current.key === key ? current : { key, x: 0, y: 0, data: tipData }));
-        }
-      },
+      show: (key, anchor, tipData) => place(key, anchor, tipData),
       hide: (key) => setTip((current) => (current && current.key === key ? null : current)),
       toggle: (key, anchor, tipData) => {
-        setTip((current) => {
-          if (current && current.key === key) return null;
-          return { key, x: 0, y: 0, data: tipData };
-        });
-        if (anchor?.measureInWindow) {
-          anchor.measureInWindow((x, y, w, h) => {
-            setTip((current) =>
-              current && current.key === key ? { ...current, x: x + w / 2, y: y + h } : current,
-            );
-          });
+        if (tipRef.current?.key === key) {
+          setTip(null);
+        } else {
+          place(key, anchor, tipData);
         }
       },
     }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
 
@@ -100,7 +110,13 @@ export function Dashboard({
     tip === null ? 0 : Math.min(Math.max(4, tip.x - TIP_WIDTH / 2), Math.max(4, rootWidth - TIP_WIDTH - 4));
 
   return (
-    <View style={stylesGrid(compact)} onLayout={(event) => setRootWidth(event.nativeEvent.layout.width)}>
+    <View
+      ref={(node) => {
+        rootRef.current = node;
+      }}
+      style={stylesGrid(compact)}
+      onLayout={(event) => setRootWidth(event.nativeEvent.layout.width)}
+    >
       <View style={stylesCard(theme, compact)}>
         <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
           <Text style={stylesCardTitle(theme)}>OVERVIEW</Text>
@@ -181,7 +197,7 @@ function stylesGrid(compact: boolean) {
   return {
     flexDirection: "row" as const,
     flexWrap: "wrap" as const,
-    alignItems: "flex-start" as const,
+    // default cross-axis stretch: cards in a grid row share one height
     gap: compact ? 8 : 12,
     width: "100%" as const,
   };
@@ -196,6 +212,13 @@ function stylesCard(theme: PluginHostProps["theme"], compact: boolean) {
     padding: compact ? 10 : 14,
     gap: 8,
   };
+}
+
+/** Dashed vertical crosshair segments (RN has no stroke dash without svg). */
+function crosshairSegments(theme: PluginHostProps["theme"], height: number, keyPrefix: string) {
+  return Array.from({ length: Math.floor(height / 5) }, (_, i) => (
+    <View key={`${keyPrefix}-${i}`} style={{ width: 1, height: 3, backgroundColor: theme.colors.foregroundMuted }} />
+  ));
 }
 
 function stylesCardTitle(theme: PluginHostProps["theme"]) {
@@ -395,9 +418,12 @@ function MostActiveAndWeekly({
   tips: TipController;
 }) {
   const barRefs = useRef(new Map<number, View>());
+  const [width, setWidth] = useState(0);
+  const [cross, setCross] = useState<number | null>(null);
   const maxWeekly = Math.max(1, ...series.weekly.map((point) => point.tokens));
   const mad = series.mostActiveDay;
   const barHeight = compact ? 42 : 56;
+  const slotWidth = width > 0 ? width / 7 : 0;
 
   return (
     <View style={{ gap: 10, marginTop: 2 }}>
@@ -415,7 +441,10 @@ function MostActiveAndWeekly({
           <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>No usage in this period.</Text>
         )}
       </View>
-      <View style={{ flexDirection: "row", alignItems: "flex-end", gap: 6, height: barHeight + 14 }}>
+      <View
+        onLayout={(event) => setWidth(event.nativeEvent.layout.width)}
+        style={{ flexDirection: "row", alignItems: "flex-end", gap: 6, height: barHeight + 14 }}
+      >
         {WEEKDAY_MON_FIRST.map((weekday) => {
           const point: WeeklyPoint | undefined = series.weekly[weekday];
           const ratio = point ? point.tokens / maxWeekly : 0;
@@ -438,14 +467,18 @@ function MostActiveAndWeekly({
                     if (node) barRefs.current.set(weekday, node);
                     else barRefs.current.delete(weekday);
                   }) as never}
-                  onHoverIn={() =>
+                  onHoverIn={() => {
+                    setCross(weekday);
                     tips.show(`week-${weekday}`, barRefs.current.get(weekday) ?? null, {
                       title: WEEKDAY_SHORT[weekday],
                       total: `${formatTokens(point.tokens)} tokens`,
                       rows: [{ label: "Cost", value: `$${point.costUsd.toFixed(2)}` }],
-                    })
-                  }
-                  onHoverOut={() => tips.hide(`week-${weekday}`)}
+                    });
+                  }}
+                  onHoverOut={() => {
+                    setCross((current) => (current === weekday ? null : current));
+                    tips.hide(`week-${weekday}`);
+                  }}
                   onPress={() =>
                     tips.toggle(`week-${weekday}`, barRefs.current.get(weekday) ?? null, {
                       title: WEEKDAY_SHORT[weekday],
@@ -466,6 +499,21 @@ function MostActiveAndWeekly({
             </View>
           );
         })}
+        {cross !== null && width > 0 ? (
+          <View
+            pointerEvents="none"
+            style={{
+              position: "absolute",
+              top: 0,
+              height: barHeight,
+              left: WEEKDAY_MON_FIRST.indexOf(cross) * slotWidth + slotWidth / 2,
+              width: 0,
+              gap: 2,
+            }}
+          >
+            {crosshairSegments(theme, barHeight, "weekly")}
+          </View>
+        ) : null}
       </View>
     </View>
   );
@@ -488,6 +536,7 @@ function TrendChart({
 }) {
   const chartHeight = compact ? 64 : 84;
   const [width, setWidth] = useState(0);
+  const [cross, setCross] = useState<string | null>(null);
   const barRefs = useRef(new Map<string, View>());
 
   const { maxTokens, maxCost, active } = useMemo(() => {
@@ -561,8 +610,14 @@ function TrendChart({
           if (node) barRefs.current.set(key, node);
           else barRefs.current.delete(key);
         }) as never}
-        onHoverIn={() => tips.show(key, barRefs.current.get(key) ?? null, dailyTip(point))}
-        onHoverOut={() => tips.hide(key)}
+        onHoverIn={() => {
+          setCross(point.date);
+          tips.show(key, barRefs.current.get(key) ?? null, dailyTip(point));
+        }}
+        onHoverOut={() => {
+          setCross((current) => (current === point.date ? null : current));
+          tips.hide(key);
+        }}
         onPress={() => tips.toggle(key, barRefs.current.get(key) ?? null, dailyTip(point))}
       >
         {column}
@@ -571,6 +626,8 @@ function TrendChart({
       <View key={point.date}>{column}</View>
     );
   };
+
+  const crossIndex = cross ? points.findIndex((point) => point.date === cross) : -1;
 
   const inner = (
     <View
@@ -582,6 +639,21 @@ function TrendChart({
       }}
     >
       {points.map((point) => renderBar(point))}
+      {crossIndex >= 0 ? (
+        <View
+          pointerEvents="none"
+          style={{
+            position: "absolute",
+            top: 0,
+            height: chartHeight,
+            left: crossIndex * slotWidth + slotWidth / 2,
+            width: 0,
+            gap: 2,
+          }}
+        >
+          {crosshairSegments(theme, chartHeight, "trend")}
+        </View>
+      ) : null}
     </View>
   );
 
