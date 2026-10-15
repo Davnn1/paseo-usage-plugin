@@ -97,6 +97,17 @@ test("aggregateUsage groups by backend/provider/model and totals equal sum of en
   assert.equal(a?.cacheHitRatio, 0.9);
 });
 
+test("aggregateUsage counts distinct sessions when rows carry a sessionId", () => {
+  const rows = [
+    row({ model: "m", sessionId: "s1", inputTokens: 1 }),
+    row({ model: "m", sessionId: "s1", inputTokens: 1 }),
+    row({ model: "m", sessionId: "s2", inputTokens: 1 }),
+  ];
+  const { entries, totals } = aggregateUsage(rows);
+  assert.equal(entries.find((entry) => entry.model === "m")?.sessions, 2);
+  assert.equal(totals.sessions, 2);
+});
+
 test("codex parser prefers total_token_usage over last_token_usage", () => {
   const lines = [
     JSON.stringify({
@@ -286,6 +297,37 @@ test("bucketDaily sums same-day rows and handles empty input", () => {
     { date: "2026-10-07", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, costUsd: 0, sessions: 0, models: [] },
     { date: "2026-10-08", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, costUsd: 0, sessions: 0, models: [] },
   ]);
+});
+
+test("bucketDaily per-model tokens are cache-inclusive so the breakdown sums to the headline", () => {
+  // The tooltip headline is dailyTokens (in+out+cache-read) while the per-model
+  // list used to sum input+output only, so a cache-heavy model looked ~60x
+  // smaller than its share of the headline it sits under.
+  const rows = [
+    row({ timestampMs: NOW_DAY, model: "mimo-v2.6-flash", inputTokens: 10, outputTokens: 2, cacheReadTokens: 100 }),
+  ];
+  const daily = bucketDaily(rows, 1, NOW_DAY + 12 * 3600_000);
+  assert.equal(dailyTokens(daily[0]), 112);
+  assert.equal(daily[0].models.length, 1);
+  assert.equal(daily[0].models[0].tokens, 112);
+});
+
+test("bucketDaily counts distinct sessions per day, not usage rows", () => {
+  // Antigravity emits one row per generation, so a single conversation could
+  // be reported as hundreds of "sessions".
+  const rows = [
+    row({ timestampMs: NOW_DAY, model: "m", sessionId: "conv-1", inputTokens: 1 }),
+    row({ timestampMs: NOW_DAY, model: "m", sessionId: "conv-1", inputTokens: 1 }),
+    row({ timestampMs: NOW_DAY, model: "m", sessionId: "conv-2", inputTokens: 1 }),
+  ];
+  const daily = bucketDaily(rows, 1, NOW_DAY + 12 * 3600_000);
+  assert.equal(daily[0].sessions, 2);
+});
+
+test("bucketDaily falls back to one session per row when sessionId is absent", () => {
+  const rows = [row({ timestampMs: NOW_DAY }), row({ timestampMs: NOW_DAY })];
+  const daily = bucketDaily(rows, 1, NOW_DAY + 12 * 3600_000);
+  assert.equal(daily[0].sessions, 2);
 });
 
 test("bucketDaily with null window starts at earliest row", () => {
@@ -528,6 +570,27 @@ test("countSteps and collectStats read a fixture conversations directory", () =>
   assert.equal(stats?.steps, 3);
   assert.equal(stats?.byModel.size, 0); // no gen_metadata table -> no decoded models
   assert.equal(collectStats(join(dir, "missing")), null);
+});
+
+test("antigravity rows carry the conversation id as sessionId", () => {
+  // collectAntigravity emits one row per generation; without a session id the
+  // daily chart reports a single conversation as N "sessions".
+  const home = mkdtempSync(join(tmpdir(), "usage-agy-rows-"));
+  const conv = "aaaa1111-2222-4333-8444-555566667777";
+  const convDir = join(home, ".gemini", "antigravity-acp", "conversations");
+  mkdirSync(convDir, { recursive: true });
+  const db = new DatabaseSync(join(convDir, `${conv}.db`));
+  db.exec("CREATE TABLE steps (id INTEGER)");
+  db.exec("CREATE TABLE gen_metadata (idx INTEGER PRIMARY KEY, data BLOB, size INTEGER DEFAULT 0)");
+  db.prepare("INSERT INTO gen_metadata VALUES (0, ?, 0)").run(Buffer.from(buildGenBlob(100, 20, "mimo-v2.6-flash", 0, 0)));
+  db.prepare("INSERT INTO gen_metadata VALUES (1, ?, 0)").run(Buffer.from(buildGenBlob(10, 5, "mimo-v2.6-flash", 0, 0)));
+  db.close();
+
+  const { rows } = collectAntigravity(home);
+  assert.equal(rows.length, 2);
+  for (const r of rows) assert.equal(r.sessionId, conv);
+  const daily = bucketDaily(rows, 1, Date.now());
+  assert.equal(daily.at(-1)?.sessions, 1); // two generations, one conversation
 });
 
 // ---------------------------------------------------------------------------
@@ -1076,10 +1139,12 @@ test("daily and weekly bucketing produce per-model breakdowns (top 8 + other)", 
   assert.ok(day);
   assert.equal(day.models.length, 9); // top 8 + other
   assert.equal(day.models[0].model, "model-8");
-  assert.equal(day.models[0].tokens, 10_900); // 900 + 10000 on the same model
+  // Per-model tokens are total tokens (in + out + cache-read), matching the
+  // daily headline: 900+900 (input+cache) on the first row, 10_000+900 on the second.
+  assert.equal(day.models[0].tokens, 12_700);
   const other = day.models[day.models.length - 1];
   assert.equal(other.model, "other");
-  assert.equal(other.tokens, 100); // model-0 falls past the top 8
+  assert.equal(other.tokens, 1000); // model-0 (100 in + 900 cache) falls past the top 8
   // descending order
   for (let i = 1; i < day.models.length; i += 1) {
     assert.ok(day.models[i - 1].tokens >= day.models[i].tokens);
@@ -1090,7 +1155,7 @@ test("daily and weekly bucketing produce per-model breakdowns (top 8 + other)", 
   assert.equal(thursday.inputTokens, 10_900 + 3_600);
   assert.equal(thursday.models[0].model, "model-8");
   const monday = weekly[1]; // 2026-10-05
-  assert.equal(monday.models[0].tokens, 80);
+  assert.equal(monday.models[0].tokens, 980); // 50 in + 30 out + 900 cache
 });
 
 test("cache columns are enriched from proxy matches only (no aggregate change)", () => {

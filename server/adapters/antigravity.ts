@@ -268,6 +268,9 @@ export function collectAntigravity(
         backend,
         provider,
         model: generation.model,
+        // The conversation database file is the session identity; without it
+        // every generation would be counted as its own session downstream.
+        sessionId: generation.conversation,
         inputTokens: generation.inputTokens,
         outputTokens: generation.outputTokens,
         reasoningTokens: generation.thinkingTokens,

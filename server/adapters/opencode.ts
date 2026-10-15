@@ -21,7 +21,7 @@ export function readOpenCodeRows(dbPath: string = DB_PATH): UsageRow[] {
   try {
     const rows = db
       .prepare(
-        `SELECT model, cost, tokens_input, tokens_output, tokens_reasoning,
+        `SELECT id, model, cost, tokens_input, tokens_output, tokens_reasoning,
                 tokens_cache_read, tokens_cache_write, time_created
          FROM session`,
       )
@@ -34,6 +34,7 @@ export function readOpenCodeRows(dbPath: string = DB_PATH): UsageRow[] {
         backend: "opencode",
         provider: parsed.providerID || "unknown",
         model: parsed.id || "unknown",
+        sessionId: row.id,
         inputTokens: row.tokens_input ?? 0,
         outputTokens: row.tokens_output ?? 0,
         reasoningTokens: row.tokens_reasoning ?? 0,

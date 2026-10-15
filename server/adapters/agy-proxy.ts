@@ -85,6 +85,7 @@ export function callsToRows(calls: AgyCall[]): UsageRow[] {
       backend: target.backend,
       provider: target.provider,
       model: call.model,
+      sessionId: call.conversationId ?? call.sessionId,
       inputTokens: call.promptTokens,
       outputTokens: call.outputTokens,
       reasoningTokens: call.thinkingTokens,

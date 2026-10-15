@@ -15,6 +15,10 @@ export const usageRowSchema = z.object({
   backend: z.string(),
   provider: z.string(),
   model: z.string(),
+  /** Stable id of the session this record belongs to. Adapters that emit more
+   *  than one row per session (Antigravity: one row per generation) must set
+   *  it, or consumers count records and mislabel them as sessions. */
+  sessionId: z.string().optional(),
   inputTokens: z.number(),
   outputTokens: z.number(),
   reasoningTokens: z.number(),
@@ -315,23 +319,45 @@ export function dailyTokens(point: Pick<DailyPoint, "inputTokens" | "outputToken
  * windowDays null covers everything from the earliest row through today;
  * otherwise the window ends at nowMs. All dates UTC.
  */
+type DailyAccumulator = DailyPoint & {
+  byModel: Map<string, number>;
+  sessionIds: Set<string>;
+  unkeyedRows: number;
+};
+
 export function bucketDaily(rows: UsageRow[], windowDays: number | null, nowMs: number, endMs?: number): DailyPoint[] {
-  const byDay = new Map<string, DailyPoint & { byModel: Map<string, number> }>();
+  const byDay = new Map<string, DailyAccumulator>();
   let earliest = Number.POSITIVE_INFINITY;
   for (const row of rows) {
     const key = localDateKey(row.timestampMs);
     if (row.timestampMs < earliest) earliest = row.timestampMs;
     let point = byDay.get(key);
     if (!point) {
-      point = { date: key, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, costUsd: 0, sessions: 0, models: [], byModel: new Map() };
+      point = {
+        date: key,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        costUsd: 0,
+        sessions: 0,
+        models: [],
+        byModel: new Map(),
+        sessionIds: new Set<string>(),
+        unkeyedRows: 0,
+      };
       byDay.set(key, point);
     }
     point.inputTokens += row.inputTokens;
     point.outputTokens += row.outputTokens;
     point.cacheReadTokens += row.cacheReadTokens;
     point.costUsd += row.costUsd;
-    point.sessions += 1;
-    point.byModel.set(row.model, (point.byModel.get(row.model) ?? 0) + row.inputTokens + row.outputTokens);
+    // A row is one usage record, not one session: Antigravity emits a row per
+    // generation, which otherwise reports a single conversation as N sessions.
+    if (row.sessionId) point.sessionIds.add(row.sessionId);
+    else point.unkeyedRows += 1;
+    // Same metric as dailyTokens, so the per-model breakdown sums to the
+    // headline instead of silently dropping cache-read.
+    point.byModel.set(row.model, (point.byModel.get(row.model) ?? 0) + dailyTokens(row));
   }
 
   const last = endMs ?? nowMs;
@@ -344,11 +370,17 @@ export function bucketDaily(rows: UsageRow[], windowDays: number | null, nowMs: 
   for (let t = start; t <= today; t += DAY_MS) {
     const key = localDateKey(t);
     const point = byDay.get(key);
-    result.push(
-      point
-        ? { ...point, costUsd: Math.round(point.costUsd * 100) / 100, models: topModels(point.byModel) }
-        : { date: key, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, costUsd: 0, sessions: 0, models: [] },
-    );
+    if (!point) {
+      result.push({ date: key, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, costUsd: 0, sessions: 0, models: [] });
+      continue;
+    }
+    const { byModel, sessionIds, unkeyedRows, ...rest } = point;
+    result.push({
+      ...rest,
+      costUsd: Math.round(rest.costUsd * 100) / 100,
+      sessions: sessionIds.size + unkeyedRows,
+      models: topModels(byModel),
+    });
   }
   return result;
 }
@@ -491,6 +523,7 @@ export function aggregateUsage(rows: UsageRow[]): {
   entries: UsageEntry[];
 } {
   const groups = new Map<string, UsageEntry>();
+  const sessionIds = new Map<string, Set<string>>();
   for (const row of rows) {
     const key = `${row.backend}${row.provider}${row.model}`;
     let entry = groups.get(key);
@@ -518,7 +551,20 @@ export function aggregateUsage(rows: UsageRow[]): {
     entry.cacheReadTokens += row.cacheReadTokens;
     entry.cacheWriteTokens += row.cacheWriteTokens;
     entry.costUsd += row.costUsd;
-    entry.sessions += 1;
+    // Count sessions, not records: one session may contribute many rows.
+    let seen = sessionIds.get(key);
+    if (!seen) {
+      seen = new Set<string>();
+      sessionIds.set(key, seen);
+    }
+    if (row.sessionId) {
+      if (!seen.has(row.sessionId)) {
+        seen.add(row.sessionId);
+        entry.sessions += 1;
+      }
+    } else {
+      entry.sessions += 1;
+    }
     entry.firstUsed = Math.min(entry.firstUsed, row.timestampMs);
     entry.lastUsed = Math.max(entry.lastUsed, row.timestampMs);
   }

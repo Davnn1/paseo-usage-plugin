@@ -125,7 +125,9 @@ export function readCodexRows(sessionsDir: string = SESSIONS_DIR): {
       const content = readFileSync(path, "utf8");
       const { row } = parseCodexLines(content.split("\n"));
       if (row) {
-        rows.push(row);
+        // One rollout file is one session; carry the path so downstream
+        // counts sessions rather than rows.
+        rows.push({ ...row, sessionId: path });
         filesRead += 1;
       } else {
         filesSkipped += 1;
