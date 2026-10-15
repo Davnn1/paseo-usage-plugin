@@ -673,7 +673,7 @@ test("mapSourceStatus: antigravity used via proxied calls when store is empty", 
 // Date-range filter (Week/Month/Custom)
 // ---------------------------------------------------------------------------
 
-import { dateRangeDays, dateKeyUtc, filterDateRange, rangeEndMs, selectPeriodRows, startOfLocalDay } from "../shared/usage";
+import { dateRangeDays, dateKeyUtc, filterDateRange, localDateKey, rangeEndMs, selectPeriodRows, startOfLocalDay } from "../shared/usage";
 
 test("filterDateRange is inclusive on both bounds and optional per side", () => {
   const dayRows = [
@@ -865,9 +865,12 @@ test("dashboard 7d bucketing: 7 daily points, active days, no rows lost", async 
   assert.equal(dailyTokensSum, summary.totals.inputTokens + summary.totals.outputTokens);
 
   // The 7d period chip itself still buckets exactly 7 points ending today.
+  // Buckets use the hardcoded daemon zone (Asia/Jakarta), not the machine zone,
+  // so this must assert against localDateKey - dateKeyUtc only agrees with it
+  // outside 00:00-07:00 WIB.
   const sliding = aggregator.dashboard("7d", {});
   assert.equal(sliding.series.daily.length, 7);
-  assert.equal(sliding.series.daily[6].date, dateKeyUtc(Date.now()));
+  assert.equal(sliding.series.daily[6].date, localDateKey(Date.now()));
 });
 
 test("bucketDaily with a 7d window: 7 gap-filled entries ending today", () => {

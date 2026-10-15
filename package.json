@@ -15,7 +15,7 @@
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test tests/",
+    "test": "tsx --test \"tests/*.test.ts\"",
     "verify": "tsx scripts/verify-usage.ts"
   },
   "devDependencies": {
