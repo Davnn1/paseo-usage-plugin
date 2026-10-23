@@ -1,0 +1,211 @@
+[
+ {
+  "id": "ses_ee523f71effeG7I5vm9QkmAssg",
+  "model": "{\"id\":\"kimi-for-coding\",\"providerID\":\"kimi\",\"variant\":\"default\"}",
+  "tokens_input": 64336,
+  "tokens_output": 5600,
+  "tokens_reasoning": 5059,
+  "tokens_cache_read": 1728256,
+  "tokens_cache_write": 0,
+  "cost": 0.4086399599999999,
+  "time_created": 1791451990241
+ },
+ {
+  "id": "ses_ee534f56bffeFF3UeIAVygZnRg",
+  "model": "{\"id\":\"kimi-for-coding\",\"providerID\":\"kimi\",\"variant\":\"default\"}",
+  "tokens_input": 18122,
+  "tokens_output": 2859,
+  "tokens_reasoning": 305,
+  "tokens_cache_read": 244480,
+  "tokens_cache_write": 0,
+  "cost": 0.07208628,
+  "time_created": 1791450876564
+ },
+ {
+  "id": "ses_ee553b50effex3kFW6y5oARRZc",
+  "model": "{\"id\":\"mimo-v2.6-pro\",\"providerID\":\"xiaomi-token-plan-sgp\",\"variant\":\"default\"}",
+  "tokens_input": 465998,
+  "tokens_output": 4196,
+  "tokens_reasoning": 118473,
+  "tokens_cache_read": 4054912,
+  "tokens_cache_write": 0,
+  "cost": 0.0,
+  "time_created": 1791448861425
+ },
+ {
+  "id": "ses_ee566fc28ffeOK5qo2fSH4qh3o",
+  "model": "{\"id\":\"kimi-for-coding\",\"providerID\":\"kimi\",\"variant\":\"default\"}",
+  "tokens_input": 140315,
+  "tokens_output": 31534,
+  "tokens_reasoning": 19353,
+  "tokens_cache_read": 15049991,
+  "tokens_cache_write": 0,
+  "cost": 3.02458152,
+  "time_created": 1791447598039
+ },
+ {
+  "id": "ses_ee5912e83ffeQpm5JRqW9BQkE4",
+  "model": "{\"id\":\"kimi-for-coding\",\"providerID\":\"kimi\",\"variant\":\"default\"}",
+  "tokens_input": 155432,
+  "tokens_output": 43841,
+  "tokens_reasoning": 13639,
+  "tokens_cache_read": 25315510,
+  "tokens_cache_write": 0,
+  "cost": 4.9105061999999995,
+  "time_created": 1791444832636
+ },
+ {
+  "id": "ses_ee5a3e1c7ffeKo6OfCTwF9KPcW",
+  "model": "{\"id\":\"kimi-for-coding\",\"providerID\":\"kimi\",\"variant\":\"default\"}",
+  "tokens_input": 87233,
+  "tokens_output": 15012,
+  "tokens_reasoning": 6917,
+  "tokens_cache_read": 2814464,
+  "tokens_cache_write": 0,
+  "cost": 0.6666891,
+  "time_created": 1791443607096
+ },
+ {
+  "id": "ses_ee5c51e0bffeWrAdwCQGg6xQ0G",
+  "model": "{\"id\":\"mimo-v2.6-flash\",\"providerID\":\"xiaomi-token-plan-sgp\",\"variant\":\"default\"}",
+  "tokens_input": 96808,
+  "tokens_output": 5100,
+  "tokens_reasoning": 19932,
+  "tokens_cache_read": 1141888,
+  "tokens_cache_write": 0,
+  "cost": 0.0,
+  "time_created": 1791441428981
+ },
+ {
+  "id": "ses_ee5d3164effeODtKIONMo9wjq7",
+  "model": "{\"id\":\"k3\",\"providerID\":\"kimi\",\"variant\":\"default\"}",
+  "tokens_input": 80318,
+  "tokens_output": 20019,
+  "tokens_reasoning": 21083,
+  "tokens_cache_read": 1445888,
+  "tokens_cache_write": 0,
+  "cost": 1.2912504000000005,
+  "time_created": 1791440513457
+ },
+ {
+  "id": "ses_ee60e7e76ffeIP54bOG96zwinG",
+  "model": "{\"id\":\"k3\",\"providerID\":\"kimi\",\"variant\":\"default\"}",
+  "tokens_input": 26064,
+  "tokens_output": 233,
+  "tokens_reasoning": 11,
+  "tokens_cache_read": 22784,
+  "tokens_cache_write": 0,
+  "cost": 0.0886872,
+  "time_created": 1791436620169
+ },
+ {
+  "id": "ses_ee61d32efffevhqd2ttF5LiNL1",
+  "model": "{\"id\":\"mimo-v2.6-flash\",\"providerID\":\"xiaomi-token-plan-sgp\",\"variant\":\"default\"}",
+  "tokens_input": 273805,
+  "tokens_output": 28072,
+  "tokens_reasoning": 43843,
+  "tokens_cache_read": 7861312,
+  "tokens_cache_write": 0,
+  "cost": 0.0,
+  "time_created": 1791435656464
+ },
+ {
+  "id": "ses_ee62165ccffeqclhYFCPIzUXNh",
+  "model": "{\"id\":\"kimi-for-coding\",\"providerID\":\"kimi\"}",
+  "tokens_input": 21622,
+  "tokens_output": 2266,
+  "tokens_reasoning": 101,
+  "tokens_cache_read": 44544,
+  "tokens_cache_write": 0,
+  "cost": 0.03628296,
+  "time_created": 1791435381300
+ },
+ {
+  "id": "ses_ee6294e4effejii9wcYk3l3bnT",
+  "model": "{\"id\":\"kimi-for-coding\",\"providerID\":\"kimi\",\"variant\":\"default\"}",
+  "tokens_input": 107626,
+  "tokens_output": 19379,
+  "tokens_reasoning": 16392,
+  "tokens_cache_read": 5383318,
+  "tokens_cache_write": 0,
+  "cost": 1.1989287600000003,
+  "time_created": 1791434863025
+ },
+ {
+  "id": "ses_ee6538a4cffeBCKHza6jBABn8X",
+  "model": "{\"id\":\"kimi-for-coding\",\"providerID\":\"kimi\",\"variant\":\"default\"}",
+  "tokens_input": 58621,
+  "tokens_output": 14133,
+  "tokens_reasoning": 7525,
+  "tokens_cache_read": 2249984,
+  "tokens_cache_write": 0,
+  "cost": 0.53832378,
+  "time_created": 1791432095155
+ },
+ {
+  "id": "ses_ee6576748ffe19wXPCFXFeouVk",
+  "model": "{\"id\":\"mimo-v2.6-flash\",\"providerID\":\"xiaomi-token-plan-sgp\"}",
+  "tokens_input": 21860,
+  "tokens_output": 2175,
+  "tokens_reasoning": 26,
+  "tokens_cache_read": 46400,
+  "tokens_cache_write": 0,
+  "cost": 0.0,
+  "time_created": 1791431841975
+ },
+ {
+  "id": "ses_ee6579f34ffeMyyBVrzvi0t8y0",
+  "model": "{\"id\":\"mimo-v2.6-flash\",\"providerID\":\"xiaomi-token-plan-sgp\",\"variant\":\"default\"}",
+  "tokens_input": 18319,
+  "tokens_output": 212,
+  "tokens_reasoning": 3709,
+  "tokens_cache_read": 3520,
+  "tokens_cache_write": 0,
+  "cost": 0.0,
+  "time_created": 1791431827659
+ },
+ {
+  "id": "ses_ee657cc5affeQmUlDyqbJ3Gxbk",
+  "model": "{\"id\":\"mimo-v2.6-pro\",\"providerID\":\"xiaomi-token-plan-sgp\",\"variant\":\"default\"}",
+  "tokens_input": 1031438,
+  "tokens_output": 47030,
+  "tokens_reasoning": 115550,
+  "tokens_cache_read": 21225216,
+  "tokens_cache_write": 0,
+  "cost": 0.0,
+  "time_created": 1791431816101
+ },
+ {
+  "id": "ses_ee6662023ffeK5tjS4adbKjnFR",
+  "model": "{\"id\":\"kimi-for-coding\",\"providerID\":\"kimi\",\"variant\":\"default\"}",
+  "tokens_input": 51485,
+  "tokens_output": 9243,
+  "tokens_reasoning": 3382,
+  "tokens_cache_read": 2169344,
+  "tokens_cache_write": 0,
+  "cost": 0.48378342000000013,
+  "time_created": 1791430877148
+ },
+ {
+  "id": "ses_ee67e2839ffeKAuhWWDv4iCWtT",
+  "model": "{\"id\":\"kimi-for-coding\",\"providerID\":\"kimi\",\"variant\":\"default\"}",
+  "tokens_input": 83089,
+  "tokens_output": 17774,
+  "tokens_reasoning": 5071,
+  "tokens_cache_read": 1981696,
+  "tokens_cache_write": 0,
+  "cost": 0.5164687800000001,
+  "time_created": 1791429302214
+ },
+ {
+  "id": "ses_1e00c121cffeSAdVwYdIGpFIQ7",
+  "model": "{\"id\":\"\",\"providerID\":\"kimi-k2.6\",\"variant\":\"default\"}",
+  "tokens_input": 0,
+  "tokens_output": 0,
+  "tokens_reasoning": 0,
+  "tokens_cache_read": 0,
+  "tokens_cache_write": 0,
+  "cost": 0.0,
+  "time_created": 1778652540387
+ }
+]
