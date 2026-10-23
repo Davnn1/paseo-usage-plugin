@@ -8,7 +8,8 @@
  *     updated in place between the two reads (opencode.db is written by active
  *     agents continuously).
  *  2. SPEC: totals are asserted against the numbers recorded in tasks/todo.md.
- *     Those were captured at 2026-10-08 17:00 on this same live database; rows
+ *     Those were recaptured on 2026-10-23 after the adapter started reading
+ *     OpenCode v2 (`session_v2`) alongside the legacy `session` table; rows
  *     updated since then shift totals upward, so a mismatch here is reported as
  *     data drift (with the measured delta) rather than a pipeline failure.
  */
@@ -20,7 +21,10 @@ import { startOfLocalDay } from "../shared/usage";
 import { readCodexRows } from "../server/adapters/codex";
 
 const DB_PATH = `${process.env.HOME}/.local/share/opencode/opencode.db`;
-const TODO_MTIME_MS = 1791453651712; // tasks/todo.md, when the spec numbers were captured
+/** Columns present in both generations; `SELECT *` cannot union them. */
+const SESSION_COLUMNS =
+  "id, model, cost, tokens_input, tokens_output, tokens_cache_read, time_created, time_updated";
+const TODO_MTIME_MS = 1792727930450; // tasks/todo.md, when the spec numbers were captured
 const LIVE_DRIFT_TOLERANCE = 0.005; // ±0.5% between the two reads of a live db
 const SPEC_TOLERANCE = 0.001; // ±0.1% against recorded spec numbers
 
@@ -32,8 +36,8 @@ interface Totals {
 }
 
 const SPEC: Record<string, Totals> = {
-  all: { costUsd: 387.25, inputTokens: 227_600_000, outputTokens: 13_700_000, cacheReadTokens: 3_236_200_000 },
-  "30d": { inputTokens: 119_416_587, outputTokens: 3_383_154, cacheReadTokens: 1_380_369_410, costUsd: 118.94 },
+  all: { costUsd: 467.94, inputTokens: 510_294_216, outputTokens: 20_902_095, cacheReadTokens: 5_580_521_152 },
+  "30d": { inputTokens: 298_499_958, outputTokens: 8_327_051, cacheReadTokens: 2_887_476_560, costUsd: 97.77 },
 };
 
 let pipelineFailures = 0;
@@ -77,11 +81,21 @@ function groundTruth(period: string): Totals {
     const dayStart = startOfLocalDay(now);
     const cutoffClause =
       period === "all" ? "1=1" : `time_created >= ${dayStart - (Number(period.replace("d", "")) - 1) * 24 * 3600 * 1000}`;
+    // Mirror the adapter: v2 migrated rows live in `session_v2`, while `session`
+    // keeps the legacy generation. Union both so neither is double-counted.
+    const hasV2 = (
+      db
+        .prepare("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'session_v2'")
+        .get() as { present?: number } | undefined
+    )?.present === 1;
+    const source = hasV2
+      ? `(SELECT ${SESSION_COLUMNS} FROM session_v2 UNION ALL SELECT ${SESSION_COLUMNS} FROM session WHERE id NOT IN (SELECT id FROM session_v2))`
+      : `(SELECT ${SESSION_COLUMNS} FROM session)`;
     const row = db
       .prepare(
         `SELECT ifnull(sum(tokens_input),0) i, ifnull(sum(tokens_output),0) o,
                 ifnull(sum(tokens_cache_read),0) cr, ifnull(sum(cost),0) c
-         FROM session WHERE model IS NOT NULL AND model != '' AND ${cutoffClause}`,
+         FROM ${source} WHERE model IS NOT NULL AND model != '' AND ${cutoffClause}`,
       )
       .get() as { i: number; o: number; cr: number; c: number };
     return { inputTokens: row.i, outputTokens: row.o, cacheReadTokens: row.cr, costUsd: row.c };
@@ -180,10 +194,18 @@ assertPipeline("codex.cached", adapterTotals.cached, reference.cached);
 
 if (specDrifts > 0) {
   const db = new DatabaseSync(DB_PATH, { readOnly: true });
+  const hasV2 = (
+    db
+      .prepare("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'session_v2'")
+      .get() as { present?: number } | undefined
+  )?.present === 1;
+  const source = hasV2
+    ? `(SELECT ${SESSION_COLUMNS} FROM session_v2 UNION ALL SELECT ${SESSION_COLUMNS} FROM session WHERE id NOT IN (SELECT id FROM session_v2))`
+    : `(SELECT ${SESSION_COLUMNS} FROM session)`;
   const drift = db
     .prepare(
       `SELECT count(*) n, ifnull(sum(tokens_input),0) i, ifnull(sum(tokens_cache_read),0) cr, round(ifnull(sum(cost),0),2) c
-       FROM session WHERE time_updated > ${TODO_MTIME_MS}`,
+       FROM ${source} WHERE time_updated > ${TODO_MTIME_MS}`,
     )
     .get() as { n: number; i: number; cr: number; c: number };
   db.close();
