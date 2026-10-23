@@ -65,6 +65,13 @@ function formatPercent(value: number): string {
   return `${(value * 100).toFixed(1)}%`;
 }
 
+/** Tokens per generation second; a dash keeps "unmeasured" distinct from 0. */
+function formatTps(value: number | undefined): string {
+  if (value === undefined || !Number.isFinite(value)) return "—";
+  if (value >= 100) return `${value.toFixed(0)} tok/s`;
+  return `${value.toFixed(1)} tok/s`;
+}
+
 export function UsageScreen({ theme, layout, host }: PluginScreenProps) {
   const [mode, setMode] = useState<Mode>("30d");
   const [anchorMs, setAnchorMs] = useState(() => Date.now());
@@ -369,6 +376,11 @@ export function UsageScreen({ theme, layout, host }: PluginScreenProps) {
                 styles={styles}
               />
               <OverviewCard
+                label="Speed (out)"
+                value={formatTps(data.totals.tokensPerSecond)}
+                styles={styles}
+              />
+              <OverviewCard
                 label="Sessions"
                 value={String(data.totals.sessions)}
                 styles={styles}
@@ -533,6 +545,7 @@ const COLUMNS: ColumnDef[] = [
   { key: "model", label: "Model", weight: 1.7, minWidth: 120 },
   { key: "inputTokens", label: "In", weight: 1, minWidth: 56 },
   { key: "outputTokens", label: "Out", weight: 1, minWidth: 56 },
+  { key: "tokensPerSecond", label: "TPS", weight: 0.9, minWidth: 54 },
   { key: "reasoningTokens", label: "Reason", weight: 1, minWidth: 60 },
   { key: "cacheReadTokens", label: "Cache-R", weight: 1.1, minWidth: 66 },
   { key: "cacheWriteTokens", label: "Cache-W", weight: 1.1, minWidth: 66 },
@@ -577,6 +590,8 @@ function EntryRow({
         return formatTokens(entry[key]);
       case "cacheHitRatio":
         return formatPercent(entry.cacheHitRatio);
+      case "tokensPerSecond":
+        return formatTps(entry.tokensPerSecond);
       case "costUsd":
         return formatCost(entry.costUsd);
       case "sessions":

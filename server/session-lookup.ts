@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import type { SessionSummaryOutput } from "../shared/usage";
+import { tokensPerSecond } from "../shared/usage";
 import { readSessionRowById } from "./adapters/opencode";
 import { readAgyProxyRows, type AgyCall } from "./adapters/agy-proxy";
 import { scanConversationDb } from "./adapters/antigravity";
@@ -107,6 +108,7 @@ function resolveOpenCode(
   if (!sessionId || !sessionId.startsWith("ses_")) return notFound("no linked opencode session");
   const row = deps.readSession(sessionId);
   if (!row) return notFound(`session ${sessionId} not in opencode.db`);
+  const tps = tokensPerSecond(row.outputTokens, row.generationMs ?? 0);
 
   return {
     found: true,
@@ -123,6 +125,7 @@ function resolveOpenCode(
     costUsd: row.costUsd,
     cacheHitRatio: row.cacheHitRatio,
     timeCreated: row.timeCreated,
+    ...(tps === undefined ? {} : { tokensPerSecond: Math.round(tps * 1000) / 1000 }),
   };
 }
 

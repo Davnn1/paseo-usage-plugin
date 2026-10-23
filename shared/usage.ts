@@ -26,6 +26,10 @@ export const usageRowSchema = z.object({
   cacheWriteTokens: z.number(),
   costUsd: z.number(),
   timestampMs: z.number(),
+  /** Wall-clock ms spent generating assistant messages in this session.
+   *  Optional: adapters that cannot measure generation time omit it, and TPS
+   *  stays undefined instead of being invented. */
+  generationMs: z.number().optional(),
 });
 export type UsageRow = z.infer<typeof usageRowSchema>;
 
@@ -43,6 +47,8 @@ export const usageEntrySchema = z.object({
   firstUsed: z.number(),
   lastUsed: z.number(),
   cacheHitRatio: z.number(),
+  /** Output tokens per generation second; absent when no durations exist. */
+  tokensPerSecond: z.number().optional(),
 });
 export type UsageEntry = z.infer<typeof usageEntrySchema>;
 
@@ -55,6 +61,8 @@ export const usageTotalsSchema = z.object({
   costUsd: z.number(),
   sessions: z.number(),
   cacheHitRatio: z.number(),
+  /** Output tokens per generation second across every measured session. */
+  tokensPerSecond: z.number().optional(),
 });
 export type UsageTotals = z.infer<typeof usageTotalsSchema>;
 
@@ -214,6 +222,8 @@ export const sessionSummaryOutputSchema = z.object({
   costUsd: z.number(),
   cacheHitRatio: z.number(),
   timeCreated: z.number(),
+  /** Session output TPS; absent when the session has no measured durations. */
+  tokensPerSecond: z.number().optional(),
 });
 export type SessionSummaryOutput = z.infer<typeof sessionSummaryOutputSchema>;
 
@@ -232,7 +242,6 @@ function compactTokens(value: number): string {
   if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
   return String(Math.round(value));
 }
-
 export interface PillText {
   label: string;
   title: string;
@@ -245,7 +254,7 @@ export interface PillText {
  * crowded; cost and the full breakdown live in the title/menu.
  */
 export function buildPillText(
-  session: Pick<SessionSummaryOutput, "found" | "reason" | "title" | "inputTokens" | "outputTokens" | "reasoningTokens" | "cacheReadTokens" | "cacheWriteTokens" | "cacheHitRatio" | "costUsd" | "provider" | "model"> | null,
+  session: Pick<SessionSummaryOutput, "found" | "reason" | "title" | "inputTokens" | "outputTokens" | "reasoningTokens" | "cacheReadTokens" | "cacheWriteTokens" | "cacheHitRatio" | "costUsd" | "provider" | "model" | "tokensPerSecond"> | null,
   daily: UsageTotals | null,
 ): PillText {
   if (session?.found) {
@@ -255,7 +264,9 @@ export function buildPillText(
         `Session: ${session.title || "untitled"} — ${compactTokens(session.inputTokens)} in / ${compactTokens(session.outputTokens)} out ` +
         `(reasoning ${compactTokens(session.reasoningTokens)}), cache read ${compactTokens(session.cacheReadTokens)}, ` +
         `write ${compactTokens(session.cacheWriteTokens)}, hit ${(session.cacheHitRatio * 100).toFixed(1)}%, ` +
-        `cost $${session.costUsd.toFixed(4)} · ${session.provider}/${session.model}`,
+        `cost $${session.costUsd.toFixed(4)}` +
+        (session.tokensPerSecond === undefined ? "" : `, ${session.tokensPerSecond.toFixed(1)} tok/s`) +
+        ` · ${session.provider}/${session.model}`,
     };
   }
   if (daily) {
@@ -448,6 +459,15 @@ export function cacheHitRatio(cacheReadTokens: number, inputTokens: number): num
 }
 
 /**
+ * Output tokens per second of measured generation time. Returns undefined
+ * instead of 0 when either side is unknown, so the UI can stay honest.
+ */
+export function tokensPerSecond(outputTokens: number, generationMs: number): number | undefined {
+  if (!(outputTokens > 0) || !(generationMs > 0)) return undefined;
+  return outputTokens / (generationMs / 1000);
+}
+
+/**
  * Keep rows whose UTC calendar day falls inside the period ending today, so
  * the sliding filter and the daily bucketing cover exactly the same days
  * (sum of daily points equals totals for every period).
@@ -524,6 +544,10 @@ export function aggregateUsage(rows: UsageRow[]): {
 } {
   const groups = new Map<string, UsageEntry>();
   const sessionIds = new Map<string, Set<string>>();
+  const generationMs = new Map<string, number>();
+  const measuredOutput = new Map<string, number>();
+  let totalGenerationMs = 0;
+  let totalMeasuredOutput = 0;
   for (const row of rows) {
     const key = `${row.backend}${row.provider}${row.model}`;
     let entry = groups.get(key);
@@ -544,6 +568,12 @@ export function aggregateUsage(rows: UsageRow[]): {
         cacheHitRatio: 0,
       };
       groups.set(key, entry);
+    }
+    if (row.generationMs !== undefined && row.generationMs > 0) {
+      generationMs.set(key, (generationMs.get(key) ?? 0) + row.generationMs);
+      measuredOutput.set(key, (measuredOutput.get(key) ?? 0) + row.outputTokens);
+      totalGenerationMs += row.generationMs;
+      totalMeasuredOutput += row.outputTokens;
     }
     entry.inputTokens += row.inputTokens;
     entry.outputTokens += row.outputTokens;
@@ -570,11 +600,16 @@ export function aggregateUsage(rows: UsageRow[]): {
   }
 
   const entries = [...groups.values()]
-    .map((entry) => ({
-      ...entry,
-      costUsd: round2(entry.costUsd),
-      cacheHitRatio: cacheHitRatio(entry.cacheReadTokens, entry.inputTokens),
-    }))
+    .map((entry) => {
+      const key = `${entry.backend}${entry.provider}${entry.model}`;
+      const tps = tokensPerSecond(measuredOutput.get(key) ?? 0, generationMs.get(key) ?? 0);
+      return {
+        ...entry,
+        costUsd: round2(entry.costUsd),
+        cacheHitRatio: cacheHitRatio(entry.cacheReadTokens, entry.inputTokens),
+        ...(tps === undefined ? {} : { tokensPerSecond: round3(tps) }),
+      };
+    })
     .sort((a, b) => b.costUsd - a.costUsd);
 
   const totals = entries.reduce<UsageTotals>(
@@ -601,10 +636,16 @@ export function aggregateUsage(rows: UsageRow[]): {
   );
   totals.costUsd = round2(totals.costUsd);
   totals.cacheHitRatio = cacheHitRatio(totals.cacheReadTokens, totals.inputTokens);
+  const overallTps = tokensPerSecond(totalMeasuredOutput, totalGenerationMs);
+  if (overallTps !== undefined) totals.tokensPerSecond = round3(overallTps);
 
   return { totals, entries };
 }
 
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
+}
+
+function round3(value: number): number {
+  return Math.round(value * 1000) / 1000;
 }

@@ -45,6 +45,12 @@ function formatTokens(value: number): string {
   return String(Math.round(value));
 }
 
+/** Tokens per generation second; a dash keeps "unmeasured" distinct from 0. */
+function formatTps(value: number | undefined): string {
+  if (value === undefined || !Number.isFinite(value)) return "—";
+  return value >= 100 ? `${value.toFixed(0)} tok/s` : `${value.toFixed(1)} tok/s`;
+}
+
 interface PillData {
   session: SessionSummaryOutput | null;
   daily: UsageTotals | null;
@@ -76,6 +82,7 @@ function PillDetailCard({ data }: { data: () => PillData | undefined }) {
       rows = [
         { id: "input", label: "Input", value: formatTokens(session.inputTokens), dotColor: theme.colors.statusSuccess },
         { id: "output", label: "Output", value: formatTokens(session.outputTokens), dotColor: theme.colors.statusSuccess, dotOpacity: 0.55 },
+        { id: "tps", label: "Speed", value: formatTps(session.tokensPerSecond), dotColor: theme.colors.accent },
         { id: "reasoning", label: "Reasoning", value: formatTokens(session.reasoningTokens), dotColor: theme.colors.foregroundMuted },
         { id: "cache-read", label: "Cache Read", value: formatTokens(session.cacheReadTokens), dotColor: theme.colors.border },
         { id: "cache-write", label: "Cache Write", value: formatTokens(session.cacheWriteTokens), dotColor: theme.colors.border, dotOpacity: 0.6 },
@@ -87,6 +94,7 @@ function PillDetailCard({ data }: { data: () => PillData | undefined }) {
       rows = [
         { id: "input", label: "Input", value: formatTokens(daily.inputTokens), dotColor: theme.colors.statusSuccess },
         { id: "output", label: "Output", value: formatTokens(daily.outputTokens), dotColor: theme.colors.statusSuccess, dotOpacity: 0.55 },
+        { id: "tps", label: "Speed", value: formatTps(daily.tokensPerSecond), dotColor: theme.colors.accent },
         { id: "reasoning", label: "Reasoning", value: formatTokens(daily.reasoningTokens), dotColor: theme.colors.foregroundMuted },
         { id: "cache-read", label: "Cache Read", value: formatTokens(daily.cacheReadTokens), dotColor: theme.colors.border },
         { id: "cache-write", label: "Cache Write", value: formatTokens(daily.cacheWriteTokens), dotColor: theme.colors.border, dotOpacity: 0.6 },
@@ -192,6 +200,8 @@ function contributeUsagePill(client: PluginClientContext) {
     if (lifetime.signal.aborted || !pills.has(agentId)) return;
     latest.set(agentId, { session, daily });
     try {
+      // Keep the pill title static: TPS and the full breakdown live in the
+      // detail card, the visible label stays compact.
       registration.update({ label: buildPillText(session, daily).label, title: "Monitoring", icon: "Activity" });
     } catch (error) {
       console.error("[usage] pill update failed", error);

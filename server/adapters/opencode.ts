@@ -16,20 +16,133 @@ interface SessionRecord {
   time_created: number;
 }
 
+const SESSION_COLUMNS = `id, title, model, cost, tokens_input, tokens_output, tokens_reasoning,
+                tokens_cache_read, tokens_cache_write, time_created`;
+
+/**
+ * OpenCode v1 stores sessions in `session`, v2 in `session_v2` (`session` is
+ * kept as the legacy table; v2 migrates those rows into `session_v2`). Read
+ * whichever exists and union legacy-only rows so neither generation is lost.
+ */
+function selectSessions(db: DatabaseSync): SessionRecord[] {
+  const hasV2 = tableExists(db, "session_v2");
+  const hasV1 = tableExists(db, "session");
+  if (hasV2 && hasV1) {
+    return db
+      .prepare(
+        `SELECT ${SESSION_COLUMNS} FROM session_v2
+         UNION ALL
+         SELECT ${SESSION_COLUMNS} FROM session WHERE id NOT IN (SELECT id FROM session_v2)`,
+      )
+      .all() as unknown as SessionRecord[];
+  }
+  const table = hasV2 ? "session_v2" : "session";
+  if (!hasV1 && !hasV2) throw new Error("opencode.db has no session table");
+  return db.prepare(`SELECT ${SESSION_COLUMNS} FROM ${table}`).all() as unknown as SessionRecord[];
+}
+
+/** Look up one session in the v2 table first, then the legacy v1 table. */
+function selectSessionById(db: DatabaseSync, sessionId: string): SessionRecord | undefined {
+  const tables = ["session_v2", "session"].filter((table) => tableExists(db, table));
+  for (const table of tables) {
+    const row = db
+      .prepare(`SELECT ${SESSION_COLUMNS} FROM ${table} WHERE id = ?`)
+      .get(sessionId) as SessionRecord | undefined;
+    if (row) return row;
+  }
+  return undefined;
+}
+
+function tableExists(db: DatabaseSync, name: string): boolean {
+  const row = db
+    .prepare("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .get(name) as { present?: number } | undefined;
+  return row?.present === 1;
+}
+
+interface MessageTime {
+  created?: number;
+  completed?: number;
+  streamed?: number;
+}
+
+interface MessageTokens {
+  output?: number;
+}
+
+interface MessageRecord {
+  session_id: string;
+  data: string;
+}
+
+/**
+ * Sum measured generation time per session, in ms.
+ *
+ * v2 keeps messages in `session_message`; v1 used `message` (v2 migrates v1
+ * messages into `session_message`, and v1 rows never carry completion times).
+ * Duration is completed-at minus created-at, falling back to the last streamed
+ * timestamp; rows without a positive duration contribute nothing.
+ */
+function generationMsBySession(db: DatabaseSync, sessionId?: string): Map<string, number> {
+  const bySession = new Map<string, number>();
+  const source = tableExists(db, "session_message")
+    ? { table: "session_message", where: "type = 'assistant'" }
+    : tableExists(db, "message")
+      ? { table: "message", where: `data LIKE '%"tokens"%'` }
+      : null;
+  if (!source) return bySession;
+
+  const filter = sessionId === undefined ? "" : " AND session_id = ?";
+  const statement = db.prepare(
+    `SELECT session_id, data FROM ${source.table} WHERE ${source.where}${filter}`,
+  );
+  const rows = (
+    sessionId === undefined ? statement.all() : statement.all(sessionId)
+  ) as unknown as MessageRecord[];
+  for (const row of rows) {
+    const parsed = parseMessageUsage(row.data);
+    if (!parsed) continue;
+    bySession.set(row.session_id, (bySession.get(row.session_id) ?? 0) + parsed.generationMs);
+  }
+  return bySession;
+}
+
+/** Extract output tokens + generation duration from one assistant message. */
+export function parseMessageUsage(raw: string): { outputTokens: number; generationMs: number } | null {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (typeof value !== "object" || value === null) return null;
+  const record = value as Record<string, unknown>;
+  const tokens = record.tokens as MessageTokens | undefined;
+  const time = record.time as MessageTime | undefined;
+  const outputTokens = typeof tokens?.output === "number" ? tokens.output : 0;
+  const created = typeof time?.created === "number" ? time.created : undefined;
+  const finished =
+    typeof time?.completed === "number"
+      ? time.completed
+      : typeof time?.streamed === "number"
+        ? time.streamed
+        : undefined;
+  if (!created || finished === undefined) return null;
+  const generationMs = finished - created;
+  if (!(generationMs > 0)) return null;
+  return { outputTokens, generationMs };
+}
+
 export function readOpenCodeRows(dbPath: string = DB_PATH): UsageRow[] {
   const db = new DatabaseSync(dbPath, { readOnly: true });
   try {
-    const rows = db
-      .prepare(
-        `SELECT id, model, cost, tokens_input, tokens_output, tokens_reasoning,
-                tokens_cache_read, tokens_cache_write, time_created
-         FROM session`,
-      )
-      .all() as unknown as SessionRecord[];
+    const sessions = selectSessions(db);
+    const generationMs = generationMsBySession(db);
     const result: UsageRow[] = [];
-    for (const row of rows) {
+    for (const row of sessions) {
       const parsed = parseModelJson(row.model);
       if (!parsed) continue; // row without a model JSON contributes no attributable usage
+      const generation = row.id ? generationMs.get(row.id) : undefined;
       result.push({
         backend: "opencode",
         provider: parsed.providerID || "unknown",
@@ -42,6 +155,7 @@ export function readOpenCodeRows(dbPath: string = DB_PATH): UsageRow[] {
         cacheWriteTokens: row.tokens_cache_write ?? 0,
         costUsd: row.cost ?? 0,
         timestampMs: row.time_created ?? 0,
+        ...(generation ? { generationMs: generation } : {}),
       });
     }
     return result;
@@ -80,6 +194,7 @@ export interface SessionRow {
   costUsd: number;
   cacheHitRatio: number;
   timeCreated: number;
+  generationMs?: number;
 }
 
 /** Map one raw session table row; null when the model JSON is unusable. */
@@ -105,19 +220,15 @@ export function mapSessionRow(raw: SessionRecord): Omit<SessionRow, "cacheHitRat
 export function readSessionRowById(sessionId: string, dbPath: string = DB_PATH): SessionRow | null {
   const db = new DatabaseSync(dbPath, { readOnly: true });
   try {
-    const raw = db
-      .prepare(
-        `SELECT id, title, model, cost, tokens_input, tokens_output, tokens_reasoning,
-                tokens_cache_read, tokens_cache_write, time_created
-         FROM session WHERE id = ?`,
-      )
-      .get(sessionId) as SessionRecord | undefined;
+    const raw = selectSessionById(db, sessionId);
     if (!raw) return null;
     const mapped = mapSessionRow(raw);
     if (!mapped) return null;
+    const generationMs = generationMsBySession(db, sessionId).get(sessionId);
     return {
       ...mapped,
       cacheHitRatio: cacheHit(mapped.cacheReadTokens, mapped.inputTokens),
+      ...(generationMs ? { generationMs } : {}),
     };
   } finally {
     db.close();
