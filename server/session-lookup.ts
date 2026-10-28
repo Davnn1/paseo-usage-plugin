@@ -108,7 +108,7 @@ function resolveOpenCode(
   if (!sessionId || !sessionId.startsWith("ses_")) return notFound("no linked opencode session");
   const row = deps.readSession(sessionId);
   if (!row) return notFound(`session ${sessionId} not in opencode.db`);
-  const tps = tokensPerSecond(row.outputTokens, row.generationMs ?? 0);
+  const tps = tokensPerSecond(row.outputTokens + row.reasoningTokens, row.generationMs ?? 0);
 
   return {
     found: true,

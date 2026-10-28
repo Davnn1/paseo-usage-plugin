@@ -68,6 +68,7 @@ interface MessageTime {
 
 interface MessageTokens {
   output?: number;
+  reasoning?: number;
 }
 
 interface MessageRecord {
@@ -107,8 +108,10 @@ function generationMsBySession(db: DatabaseSync, sessionId?: string): Map<string
   return bySession;
 }
 
-/** Extract output tokens + generation duration from one assistant message. */
-export function parseMessageUsage(raw: string): { outputTokens: number; generationMs: number } | null {
+/** Extract output/reasoning tokens + streaming duration from one assistant message. */
+export function parseMessageUsage(
+  raw: string,
+): { outputTokens: number; reasoningTokens: number; generationMs: number } | null {
   let value: unknown;
   try {
     value = JSON.parse(raw);
@@ -120,17 +123,17 @@ export function parseMessageUsage(raw: string): { outputTokens: number; generati
   const tokens = record.tokens as MessageTokens | undefined;
   const time = record.time as MessageTime | undefined;
   const outputTokens = typeof tokens?.output === "number" ? tokens.output : 0;
+  const reasoningTokens = typeof tokens?.reasoning === "number" ? tokens.reasoning : 0;
   const created = typeof time?.created === "number" ? time.created : undefined;
-  const finished =
-    typeof time?.completed === "number"
-      ? time.completed
-      : typeof time?.streamed === "number"
-        ? time.streamed
-        : undefined;
+  // Mirror opencode's own TPS: the denominator is the streaming window
+  // (`time.streamed` minus `time.created`). `time.completed` is stamped after
+  // tool calls and permission prompts finish, so using it would count tool
+  // runtime and human wait time as generation time.
+  const finished = typeof time?.streamed === "number" ? time.streamed : undefined;
   if (!created || finished === undefined) return null;
   const generationMs = finished - created;
   if (!(generationMs > 0)) return null;
-  return { outputTokens, generationMs };
+  return { outputTokens, reasoningTokens, generationMs };
 }
 
 export function readOpenCodeRows(dbPath: string = DB_PATH): UsageRow[] {

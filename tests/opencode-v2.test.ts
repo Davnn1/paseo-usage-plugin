@@ -50,9 +50,14 @@ function insertSession(db: DatabaseSync, table: string, seed: SessionSeed): void
   );
 }
 
-function assistantMessage(created: number, completed: number, output: number): string {
+function assistantMessage(
+  created: number,
+  completed: number,
+  output: number,
+  streamed = completed,
+): string {
   return JSON.stringify({
-    time: { created, completed, streamed: completed - 5 },
+    time: { created, completed, streamed },
     tokens: { input: 100, output, reasoning: 0, cache: { read: 50, write: 0 } },
   });
 }
@@ -97,16 +102,24 @@ function buildV2Db(): string {
   return path;
 }
 
-test("parseMessageUsage: completed wins, streamed is the fallback", () => {
-  assert.deepEqual(parseMessageUsage(assistantMessage(1_000, 2_500, 150)), {
+test("parseMessageUsage: streamed window is the denominator, completed is ignored", () => {
+  // Tool runtime lives between streamed and completed; it must not count.
+  const withToolGap = JSON.stringify({
+    time: { created: 1_000, streamed: 2_500, completed: 900_000 },
+    tokens: { output: 150, reasoning: 50 },
+  });
+  assert.deepEqual(parseMessageUsage(withToolGap), {
     outputTokens: 150,
+    reasoningTokens: 50,
     generationMs: 1_500,
   });
-  const streamedOnly = JSON.stringify({
-    time: { created: 1_000, streamed: 1_800 },
+  assert.equal(parseMessageUsage(assistantMessage(1_000, 2_500, 150))?.generationMs, 1_500);
+  // No streaming timestamp: unmeasured, never guessed from `completed`.
+  const completedOnly = JSON.stringify({
+    time: { created: 1_000, completed: 1_800 },
     tokens: { output: 80 },
   });
-  assert.deepEqual(parseMessageUsage(streamedOnly), { outputTokens: 80, generationMs: 800 });
+  assert.equal(parseMessageUsage(completedOnly), null);
   assert.equal(parseMessageUsage("not json"), null);
   assert.equal(parseMessageUsage(JSON.stringify({ tokens: { output: 10 } })), null);
 });
@@ -146,7 +159,7 @@ test("tokensPerSecond: undefined without measured durations", () => {
   assert.equal(tokensPerSecond(400, -1), undefined);
 });
 
-test("aggregateUsage: totals TPS uses summed output over summed generation time", () => {
+test("aggregateUsage: totals TPS uses summed measured tokens over summed streaming time", () => {
   const rows: UsageRow[] = [
     {
       backend: "opencode",
@@ -194,6 +207,28 @@ test("aggregateUsage: totals TPS uses summed output over summed generation time"
   assert.equal(totals.tokensPerSecond, 200); // 600 output / 3s, unmeasured row excluded
   assert.equal(entries.find((entry) => entry.model === "m")?.tokensPerSecond, 200);
   assert.equal(entries.find((entry) => entry.model === "other")?.tokensPerSecond, undefined);
+});
+
+test("aggregateUsage: TPS counts reasoning tokens like opencode native", () => {
+  const rows: UsageRow[] = [
+    {
+      backend: "opencode",
+      provider: "p",
+      model: "m",
+      sessionId: "a",
+      inputTokens: 0,
+      outputTokens: 100,
+      reasoningTokens: 300,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      costUsd: 1,
+      timestampMs: 1_700_000_000_000,
+      generationMs: 2_000,
+    },
+  ];
+  const { totals, entries } = aggregateUsage(rows);
+  assert.equal(totals.tokensPerSecond, 200); // (100 output + 300 reasoning) / 2s
+  assert.equal(entries[0]?.tokensPerSecond, 200);
 });
 
 test("buildPillText: session title carries TPS, label stays compact", () => {

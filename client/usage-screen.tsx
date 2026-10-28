@@ -376,7 +376,7 @@ export function UsageScreen({ theme, layout, host }: PluginScreenProps) {
                 styles={styles}
               />
               <OverviewCard
-                label="Speed (out)"
+                label="Speed"
                 value={formatTps(data.totals.tokensPerSecond)}
                 styles={styles}
               />

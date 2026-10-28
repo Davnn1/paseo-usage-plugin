@@ -26,9 +26,9 @@ export const usageRowSchema = z.object({
   cacheWriteTokens: z.number(),
   costUsd: z.number(),
   timestampMs: z.number(),
-  /** Wall-clock ms spent generating assistant messages in this session.
-   *  Optional: adapters that cannot measure generation time omit it, and TPS
-   *  stays undefined instead of being invented. */
+  /** Streaming ms for this session (sum of `time.streamed - time.created`).
+   *  Optional: adapters that cannot measure streaming omit it, and TPS stays
+   *  undefined instead of being invented. Tool runtime must not be included. */
   generationMs: z.number().optional(),
 });
 export type UsageRow = z.infer<typeof usageRowSchema>;
@@ -570,10 +570,12 @@ export function aggregateUsage(rows: UsageRow[]): {
       groups.set(key, entry);
     }
     if (row.generationMs !== undefined && row.generationMs > 0) {
+      // Match opencode's native TPS: visible output plus reasoning tokens.
+      const measured = row.outputTokens + row.reasoningTokens;
       generationMs.set(key, (generationMs.get(key) ?? 0) + row.generationMs);
-      measuredOutput.set(key, (measuredOutput.get(key) ?? 0) + row.outputTokens);
+      measuredOutput.set(key, (measuredOutput.get(key) ?? 0) + measured);
       totalGenerationMs += row.generationMs;
-      totalMeasuredOutput += row.outputTokens;
+      totalMeasuredOutput += measured;
     }
     entry.inputTokens += row.inputTokens;
     entry.outputTokens += row.outputTokens;
