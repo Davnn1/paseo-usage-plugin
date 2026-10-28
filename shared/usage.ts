@@ -30,6 +30,10 @@ export const usageRowSchema = z.object({
    *  Optional: adapters that cannot measure streaming omit it, and TPS stays
    *  undefined instead of being invented. Tool runtime must not be included. */
   generationMs: z.number().optional(),
+  /** Output + reasoning tokens from the measured messages only. Keeps the TPS
+   *  numerator on the same message set as `generationMs`; falls back to the
+   *  row totals when an adapter measures every message anyway. */
+  measuredTokens: z.number().optional(),
 });
 export type UsageRow = z.infer<typeof usageRowSchema>;
 
@@ -570,8 +574,9 @@ export function aggregateUsage(rows: UsageRow[]): {
       groups.set(key, entry);
     }
     if (row.generationMs !== undefined && row.generationMs > 0) {
-      // Match opencode's native TPS: visible output plus reasoning tokens.
-      const measured = row.outputTokens + row.reasoningTokens;
+      // Match opencode's native TPS: visible output plus reasoning, and only
+      // the messages that contributed `generationMs` (see `measuredTokens`).
+      const measured = row.measuredTokens ?? row.outputTokens + row.reasoningTokens;
       generationMs.set(key, (generationMs.get(key) ?? 0) + row.generationMs);
       measuredOutput.set(key, (measuredOutput.get(key) ?? 0) + measured);
       totalGenerationMs += row.generationMs;

@@ -77,15 +77,21 @@ interface MessageRecord {
 }
 
 /**
- * Sum measured generation time per session, in ms.
+ * Per-session measurements that both sides of the TPS ratio share.
  *
- * v2 keeps messages in `session_message`; v1 used `message` (v2 migrates v1
- * messages into `session_message`, and v1 rows never carry completion times).
- * Duration is completed-at minus created-at, falling back to the last streamed
- * timestamp; rows without a positive duration contribute nothing.
+ * Only assistant messages carrying a streaming timestamp count, so the
+ * numerator (tokens) and denominator (ms) always describe the same messages.
+ * Using session totals as the numerator would divide all tokens by a partial
+ * duration and inflate the rate. v2 keeps messages in `session_message`; v1
+ * used `message`, and v1 rows have no streaming timestamps at all.
  */
-function generationMsBySession(db: DatabaseSync, sessionId?: string): Map<string, number> {
-  const bySession = new Map<string, number>();
+interface Measurement {
+  generationMs: number;
+  tokens: number;
+}
+
+function measurementsBySession(db: DatabaseSync, sessionId?: string): Map<string, Measurement> {
+  const bySession = new Map<string, Measurement>();
   const source = tableExists(db, "session_message")
     ? { table: "session_message", where: "type = 'assistant'" }
     : tableExists(db, "message")
@@ -103,7 +109,10 @@ function generationMsBySession(db: DatabaseSync, sessionId?: string): Map<string
   for (const row of rows) {
     const parsed = parseMessageUsage(row.data);
     if (!parsed) continue;
-    bySession.set(row.session_id, (bySession.get(row.session_id) ?? 0) + parsed.generationMs);
+    const current = bySession.get(row.session_id) ?? { generationMs: 0, tokens: 0 };
+    current.generationMs += parsed.generationMs;
+    current.tokens += parsed.outputTokens + parsed.reasoningTokens;
+    bySession.set(row.session_id, current);
   }
   return bySession;
 }
@@ -140,12 +149,12 @@ export function readOpenCodeRows(dbPath: string = DB_PATH): UsageRow[] {
   const db = new DatabaseSync(dbPath, { readOnly: true });
   try {
     const sessions = selectSessions(db);
-    const generationMs = generationMsBySession(db);
+    const measurements = measurementsBySession(db);
     const result: UsageRow[] = [];
     for (const row of sessions) {
       const parsed = parseModelJson(row.model);
       if (!parsed) continue; // row without a model JSON contributes no attributable usage
-      const generation = row.id ? generationMs.get(row.id) : undefined;
+      const measured = row.id ? measurements.get(row.id) : undefined;
       result.push({
         backend: "opencode",
         provider: parsed.providerID || "unknown",
@@ -158,7 +167,9 @@ export function readOpenCodeRows(dbPath: string = DB_PATH): UsageRow[] {
         cacheWriteTokens: row.tokens_cache_write ?? 0,
         costUsd: row.cost ?? 0,
         timestampMs: row.time_created ?? 0,
-        ...(generation ? { generationMs: generation } : {}),
+        ...(measured && measured.generationMs > 0
+          ? { generationMs: measured.generationMs, measuredTokens: measured.tokens }
+          : {}),
       });
     }
     return result;
@@ -198,6 +209,9 @@ export interface SessionRow {
   cacheHitRatio: number;
   timeCreated: number;
   generationMs?: number;
+  /** Output + reasoning tokens from the measured messages only; the numerator
+   *  that pairs with `generationMs`. Absent when nothing was measured. */
+  measuredTokens?: number;
 }
 
 /** Map one raw session table row; null when the model JSON is unusable. */
@@ -227,11 +241,13 @@ export function readSessionRowById(sessionId: string, dbPath: string = DB_PATH):
     if (!raw) return null;
     const mapped = mapSessionRow(raw);
     if (!mapped) return null;
-    const generationMs = generationMsBySession(db, sessionId).get(sessionId);
+    const measured = measurementsBySession(db, sessionId).get(sessionId);
     return {
       ...mapped,
       cacheHitRatio: cacheHit(mapped.cacheReadTokens, mapped.inputTokens),
-      ...(generationMs ? { generationMs } : {}),
+      ...(measured && measured.generationMs > 0
+        ? { generationMs: measured.generationMs, measuredTokens: measured.tokens }
+        : {}),
     };
   } finally {
     db.close();

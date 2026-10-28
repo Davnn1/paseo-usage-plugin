@@ -131,6 +131,7 @@ test("readOpenCodeRows: reads the v1 session table and legacy messages", () => {
   assert.equal(rows[0].provider, "omniroute-go");
   assert.equal(rows[0].outputTokens, 400);
   assert.equal(rows[0].generationMs, 2_000);
+  assert.equal(rows[0].measuredTokens, 400);
 });
 
 test("readOpenCodeRows: reads session_v2 and counts migrated legacy rows once", () => {
@@ -140,6 +141,38 @@ test("readOpenCodeRows: reads session_v2 and counts migrated legacy rows once", 
   const v2 = rows.find((row) => row.sessionId === "ses_v2");
   assert.equal(v2?.generationMs, 4_000); // 3000ms + 1000ms, user message ignored
   assert.equal(v2?.outputTokens, 900);
+  assert.equal(v2?.measuredTokens, 900);
+});
+
+test("readOpenCodeRows: measured tokens exclude messages without streamed", () => {
+  const path = tempDbPath("opencode.db");
+  const db = new DatabaseSync(path);
+  db.exec(`CREATE TABLE session_v2 (${sessionColumns()})`);
+  db.exec(`CREATE TABLE session_message (
+    id text PRIMARY KEY, session_id text, type text, seq integer,
+    time_created integer, time_updated integer, data text)`);
+  insertSession(db, "session_v2", { id: "ses_partial", output: 900 });
+  const insert = db.prepare(
+    "INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?, ?)",
+  );
+  insert.run("sm_1", "ses_partial", "assistant", 1, 1_000, 2_000, assistantMessage(1_000, 2_000, 500));
+  // No streamed timestamp: tokens count towards totals, never towards TPS.
+  insert.run(
+    "sm_2",
+    "ses_partial",
+    "assistant",
+    2,
+    3_000,
+    4_000,
+    JSON.stringify({ time: { created: 3_000, completed: 4_000 }, tokens: { output: 400 } }),
+  );
+  db.close();
+
+  const row = readOpenCodeRows(path).find((entry) => entry.sessionId === "ses_partial");
+  assert.equal(row?.outputTokens, 900);
+  assert.equal(row?.generationMs, 1_000);
+  assert.equal(row?.measuredTokens, 500); // not 900: the second message is unmeasured
+  assert.equal(readSessionRowById("ses_partial", path)?.measuredTokens, 500);
 });
 
 test("readSessionRowById: finds v2 sessions and their measured generation time", () => {
@@ -229,6 +262,32 @@ test("aggregateUsage: TPS counts reasoning tokens like opencode native", () => {
   const { totals, entries } = aggregateUsage(rows);
   assert.equal(totals.tokensPerSecond, 200); // (100 output + 300 reasoning) / 2s
   assert.equal(entries[0]?.tokensPerSecond, 200);
+});
+
+test("aggregateUsage: measuredTokens wins over row totals for TPS", () => {
+  const rows: UsageRow[] = [
+    {
+      backend: "opencode",
+      provider: "p",
+      model: "m",
+      sessionId: "a",
+      inputTokens: 0,
+      outputTokens: 900,
+      reasoningTokens: 100,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      costUsd: 1,
+      timestampMs: 1_700_000_000_000,
+      generationMs: 2_000,
+      measuredTokens: 400, // only 400 of the 1000 tokens came from measured messages
+    },
+  ];
+  const { totals, entries } = aggregateUsage(rows);
+  assert.equal(totals.tokensPerSecond, 200); // 400 / 2s, not 1000 / 2s
+  assert.equal(entries[0]?.tokensPerSecond, 200);
+  // Totals still report every token, even the unmeasured ones.
+  assert.equal(totals.outputTokens, 900);
+  assert.equal(totals.reasoningTokens, 100);
 });
 
 test("buildPillText: session title carries TPS, label stays compact", () => {
