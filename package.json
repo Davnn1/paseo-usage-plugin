@@ -1,7 +1,7 @@
 {
-  "name": "usage",
-  "private": true,
-  "version": "0.0.0",
+  "name": "paseo-monitoring",
+  "private": false,
+  "version": "1.0.0",
   "files": [
     "paseo-plugin.json",
     "OVERVIEW.md",
@@ -9,6 +9,7 @@
     "index.client.tsx",
     "index.server.ts",
     "index.server.tsx",
+    "npm-shrinkwrap.json",
     "client/",
     "server/",
     "shared/"
@@ -19,7 +20,8 @@
     "verify": "tsx scripts/verify-usage.ts"
   },
   "devDependencies": {
-    "@getpaseo/plugin": "0.11.1",
+    "@getpaseo/client": "^0.13.2",
+    "@getpaseo/plugin": "^0.13.2",
     "@tanstack/react-query": "^5.90.11",
     "@types/node": "^22.20.5",
     "@types/react": "~19.2.0",
